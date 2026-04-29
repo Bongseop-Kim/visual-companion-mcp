@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { appendFile, mkdtemp, readFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { SessionManager } from "./session-manager";
@@ -13,6 +13,20 @@ afterEach(async () => {
 });
 
 describe("SessionManager wireframe summaries", () => {
+  test("stores sessions in a local ignored directory when baseDir is a git worktree root", async () => {
+    const manager = new SessionManager();
+    managers.push(manager);
+    const repoDir = await mkdtemp(join(tmpdir(), "visual-companion-repo-"));
+    const gitDir = join(repoDir, ".git");
+    await mkdir(gitDir);
+
+    const session = await manager.startSession({ baseDir: repoDir });
+
+    expect(session.workDir).toStartWith(join(repoDir, ".visual-companion-sessions"));
+    expect(session.eventsPath).toStartWith(session.workDir);
+    expect(await readFile(join(gitDir, "info", "exclude"), "utf8")).toContain(".visual-companion-sessions/");
+  });
+
   test("saves and reads the current wireframe summary", async () => {
     const { manager, session } = await startTestSession();
     const summary = wireframeSummary();

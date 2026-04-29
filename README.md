@@ -257,6 +257,11 @@ Options:
 - `port`: fixed port. Default: auto-select
 - `baseDir`: session storage root. Default: `~/.visual-companion-mcp`
 
+If `baseDir` points at a Git worktree root, session files are stored under that
+repo's `.visual-companion-sessions/` directory. The MCP server adds that path to
+the repo's local `.git/info/exclude` file so random session folders do not
+appear in `git status`.
+
 Returns `sessionId`, `url`, `host`, `port`, `workDir`, and `eventsPath`.
 
 The tool does not open the browser automatically. The agent should show the returned URL to the user.

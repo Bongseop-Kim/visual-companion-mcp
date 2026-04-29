@@ -1,7 +1,7 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { appendEvent, readEvents } from "./events";
 import { isFullHtmlDocument, renderScreenHtml } from "./frame";
 import {
@@ -46,7 +46,7 @@ export class SessionManager {
   async startSession(input: StartSessionInput = {}): Promise<StartSessionOutput> {
     const options = startSessionInputSchema.parse(input);
     const sessionId = createSessionId();
-    const baseDir = options.baseDir ?? join(homedir(), ".visual-companion-mcp");
+    const baseDir = await resolveSessionBaseDir(options.baseDir);
     const workDir = join(baseDir, sessionId);
     const screenDir = join(workDir, "screens");
     const eventsPath = join(workDir, "events.jsonl");
@@ -389,6 +389,46 @@ function wireframeSummaryFilename(filename: string): string {
 function createSessionId(): string {
   const random = crypto.randomUUID().slice(0, 8);
   return `${Date.now().toString(36)}-${random}`;
+}
+
+async function resolveSessionBaseDir(baseDir: string | undefined): Promise<string> {
+  if (!baseDir) return join(homedir(), ".visual-companion-mcp");
+  const gitDir = await findGitDir(baseDir);
+  if (!gitDir) return baseDir;
+  await ensureGitExcludesVisualCompanionSessions(gitDir);
+  return join(baseDir, ".visual-companion-sessions");
+}
+
+async function findGitDir(dir: string): Promise<string | null> {
+  const dotGit = join(dir, ".git");
+  try {
+    const info = await stat(dotGit);
+    if (info.isDirectory()) return dotGit;
+    if (!info.isFile()) return null;
+    const content = await readFile(dotGit, "utf8");
+    const match = content.match(/^gitdir:\s*(.+)\s*$/i);
+    if (!match) return null;
+    const gitDir = match[1]!;
+    return isAbsolute(gitDir) ? gitDir : resolve(dirname(dotGit), gitDir);
+  } catch {
+    return null;
+  }
+}
+
+async function ensureGitExcludesVisualCompanionSessions(gitDir: string): Promise<void> {
+  const infoDir = join(gitDir, "info");
+  const excludePath = join(infoDir, "exclude");
+  const pattern = ".visual-companion-sessions/";
+  await mkdir(infoDir, { recursive: true });
+  let current = "";
+  try {
+    current = await readFile(excludePath, "utf8");
+  } catch {
+    // Missing exclude files are fine; Git treats them as empty.
+  }
+  if (current.split(/\r?\n/).includes(pattern)) return;
+  const prefix = current.length > 0 && !current.endsWith("\n") ? "\n" : "";
+  await writeFile(excludePath, `${current}${prefix}${pattern}\n`, "utf8");
 }
 
 async function getAvailablePort(host: string): Promise<number> {
