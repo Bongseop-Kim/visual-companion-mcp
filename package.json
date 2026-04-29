@@ -1,0 +1,26 @@
+{
+  "name": "visual-companion-mcp",
+  "version": "0.1.0",
+  "description": "MCP server that lets coding agents show interactive local browser screens and read user selections.",
+  "type": "module",
+  "bin": {
+    "visual-companion-mcp": "./dist/index.js"
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "build": "bun build ./src/index.ts --outdir ./dist --target bun",
+    "compile": "bun build ./src/index.ts --compile --outfile ./visual-companion-mcp"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.4",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.20",
+    "typescript": "^5.9.2"
+  },
+  "engines": {
+    "bun": ">=1.2.0"
+  }
+}

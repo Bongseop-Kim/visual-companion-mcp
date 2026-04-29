@@ -1,0 +1,7 @@
+node_modules/
+dist/
+visual-companion-mcp
+.superpowers/
+coverage/
+*.log
+.*.bun-build
