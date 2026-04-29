@@ -429,6 +429,10 @@ Use this MCP server when the user asks to show a UI draft, screen mockup, protot
 
 Do not stop at listing MCP resources. This server is primarily tool-oriented.
 
+Before making frontend or screen drafts, check the target project's own \`AGENTS.md\` and follow any project-local frontend or screen guidance first.
+
+When showing many draft variants in the browser, prefer vertical stacking or responsive wrapping by default so the review page scrolls vertically. Use horizontal scrolling only when the draft itself is intentionally demonstrating a horizontal-scroll interaction.
+
 Preferred workflow:
 
 1. Call \`start_session\` to create a local browser session.

@@ -235,6 +235,13 @@ Use this flow:
 
 Do not search MCP resources first for visual-companion. It is primarily a
 tool-oriented MCP server.
+
+Before making frontend or screen drafts, check the target project's own
+`AGENTS.md` and follow any project-local frontend or screen guidance first.
+When showing many draft variants in the browser, prefer vertical stacking or
+responsive wrapping by default so the review page scrolls vertically. Use
+horizontal scrolling only when the draft itself is intentionally demonstrating a
+horizontal-scroll interaction.
 ```
 
 ## Tool Overview
