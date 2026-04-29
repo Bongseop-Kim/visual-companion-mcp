@@ -28,7 +28,10 @@ interface Session {
   screenDir: string;
   eventsPath: string;
   server: Bun.Server<unknown>;
+  wsTopic: string;
   clients: Set<Client>;
+  currentFilename: string | null;
+  currentHtml: string;
   waiters: Set<(event: CompanionEvent) => void>;
 }
 
@@ -42,6 +45,8 @@ export class SessionManager {
     const workDir = join(baseDir, sessionId);
     const screenDir = join(workDir, "screens");
     const eventsPath = join(workDir, "events.jsonl");
+    const wsTopic = `session:${sessionId}`;
+    const initialHtml = readyScreenHtml(sessionId);
     await mkdir(screenDir, { recursive: true });
     await writeFile(eventsPath, "", { flag: "a" });
 
@@ -66,13 +71,14 @@ export class SessionManager {
           return Response.json({ ok: true, sessionId });
         }
 
-        return new Response(await currentScreenHtml(session), {
+        return new Response(currentScreenHtml(session), {
           headers: { "content-type": "text/html; charset=utf-8" },
         });
       },
       websocket: {
         open(ws) {
           clients.add(ws);
+          ws.subscribe(wsTopic);
         },
         close(ws) {
           clients.delete(ws);
@@ -83,6 +89,11 @@ export class SessionManager {
           await appendEvent(eventsPath, event);
           for (const waiter of waiters) waiter(event);
         },
+        perMessageDeflate: true,
+        maxPayloadLength: 1024 * 1024,
+        idleTimeout: 120,
+        backpressureLimit: 1024 * 1024,
+        closeOnBackpressureLimit: false,
       },
     });
 
@@ -101,7 +112,10 @@ export class SessionManager {
       screenDir,
       eventsPath,
       server,
+      wsTopic,
       clients,
+      currentFilename: null,
+      currentHtml: initialHtml,
       waiters,
     };
     this.sessions.set(sessionId, session);
@@ -140,14 +154,14 @@ export class SessionManager {
     const rendered = renderScreenHtml({ sessionId: session.id, content: input.html });
     await writeFile(filePath, rendered, "utf8");
     await writeFile(join(session.workDir, "current-screen"), filename, "utf8");
+    session.currentFilename = filename;
+    session.currentHtml = rendered;
 
-    let reloadedClients = 0;
-    for (const client of session.clients) {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(JSON.stringify({ type: "reload", sessionId: session.id }));
-        reloadedClients += 1;
-      }
-    }
+    session.server.publish(
+      session.wsTopic,
+      JSON.stringify({ type: "reload", sessionId: session.id }),
+    );
+    const reloadedClients = session.clients.size;
 
     return { sessionId: session.id, filePath, reloadedClients };
   }
@@ -205,16 +219,15 @@ export class SessionManager {
   }
 }
 
-async function currentScreenHtml(session: Session): Promise<string> {
-  try {
-    const filename = await Bun.file(join(session.workDir, "current-screen")).text();
-    return await Bun.file(join(session.screenDir, filename.trim())).text();
-  } catch {
-    return renderScreenHtml({
-      sessionId: session.id,
-      content: `<h2>Visual Companion</h2><p class="subtitle">Session ${session.id} is ready. Use show_screen to render HTML here.</p>`,
-    });
-  }
+function currentScreenHtml(session: Session): string {
+  return session.currentHtml;
+}
+
+function readyScreenHtml(sessionId: string): string {
+  return renderScreenHtml({
+    sessionId,
+    content: `<h2>Visual Companion</h2><p class="subtitle">Session ${sessionId} is ready. Use show_screen to render HTML here.</p>`,
+  });
 }
 
 function parseClientEvent(message: string | Buffer): CompanionEvent | null {

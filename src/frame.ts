@@ -60,12 +60,42 @@ function helperScript(sessionId: string): string {
     socket.addEventListener("message", (event) => {
       try {
         const message = JSON.parse(event.data);
-        if (message.type === "reload") location.reload();
+        handleServerMessage(message);
       } catch {
         // Ignore non-JSON messages from experimental clients.
       }
     });
     socket.addEventListener("close", () => setTimeout(connect, 500));
+  }
+
+  function handleServerMessage(message) {
+    if (!message || typeof message.type !== "string") return;
+    if (message.type === "reload") {
+      location.reload();
+      return;
+    }
+    if (message.type === "replace-body" && typeof message.html === "string") {
+      document.body.innerHTML = message.html;
+      selected = new Set();
+      handledElement = null;
+      updateIndicator();
+      return;
+    }
+    if (message.type === "replace-style" && typeof message.css === "string") {
+      const id = typeof message.id === "string" ? message.id : "vc-live-style";
+      let style = document.getElementById(id);
+      if (!style) {
+        style = document.createElement("style");
+        style.id = id;
+        document.head.appendChild(style);
+      }
+      style.textContent = message.css;
+      return;
+    }
+    if (message.type === "patch-html" && typeof message.selector === "string" && typeof message.html === "string") {
+      const target = document.querySelector(message.selector);
+      if (target) target.innerHTML = message.html;
+    }
   }
 
   function eventText(element) {
