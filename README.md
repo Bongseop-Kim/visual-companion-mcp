@@ -23,7 +23,18 @@ It is designed for visual collaboration loops such as layout choices, wireframes
 
 ```sh
 bun install
+bun run compile
 ```
+
+To register with Codex using the recommended local configuration:
+
+```sh
+bun run install:codex
+bun run probe:mcp
+codex mcp list
+```
+
+Restart Codex after installation so the current session reloads MCP tools.
 
 ## Run
 
@@ -81,10 +92,18 @@ Equivalent `.mcp.json`:
 
 ### Codex
 
-Register the binary with the Codex CLI:
+Recommended one-command local config install:
 
 ```sh
-codex mcp add visual-companion -- ./visual-companion-mcp
+bun run install:codex
+```
+
+The script writes `~/.codex/config.toml`, creates `~/.codex/config.toml.bak` when it replaces an existing config, and sets `command`, `cwd`, `required`, timeouts, and `enabled_tools`.
+
+You can also register the binary with the Codex CLI:
+
+```sh
+codex mcp add visual-companion -- /absolute/path/to/visual-companion-mcp
 codex mcp list
 ```
 
@@ -92,10 +111,78 @@ Equivalent `~/.codex/config.toml` or project-scoped `.codex/config.toml`:
 
 ```toml
 [mcp_servers.visual-companion]
-command = "./visual-companion-mcp"
+command = "/absolute/path/to/visual-companion-mcp"
+cwd = "/absolute/path/to/visual-companion-mcp-repo"
+enabled = true
+required = true
+startup_timeout_sec = 5
+tool_timeout_sec = 120
+enabled_tools = [
+  "start_session",
+  "show_screen",
+  "read_events",
+  "wait_for_selection",
+  "stop_session",
+]
 ```
 
-If the binary is not in the client working directory, use an absolute path for `command`.
+Use an absolute path unless you are certain the MCP client launches from this repository directory.
+After adding or changing an MCP server, start a new Codex session so the available tool list is refreshed.
+`Auth: Unsupported` is expected for this local stdio server because it does not use OAuth or remote authentication.
+`required = true` makes startup failures visible instead of silently continuing without the MCP tools.
+
+If Codex shows `Tools: (none)`, verify the server directly from this repository:
+
+```sh
+bun run probe:mcp
+```
+
+Expected output:
+
+```json
+{
+  "tools": [
+    "start_session",
+    "show_screen",
+    "read_events",
+    "wait_for_selection",
+    "stop_session"
+  ],
+  "resources": [
+    {
+      "name": "visual-companion-usage",
+      "uri": "visual-companion://usage"
+    }
+  ],
+  "prompts": [
+    "show_visual_draft"
+  ]
+}
+```
+
+This server also exposes a discovery resource and prompt so tool-oriented clients can find the intended workflow even if they inspect resources or prompts before tools:
+
+- Resource: `visual-companion://usage`
+- Prompt: `show_visual_draft`
+
+For projects where visual review is common, add this to the project `AGENTS.md`:
+
+```md
+## Visual Review
+
+When the user asks to show a UI draft, prototype, screen mockup, visual option,
+A/B choice, layout review, or clickable preview, use the `visual-companion`
+MCP server immediately.
+
+Use this flow:
+1. Call `start_session`.
+2. Call `show_screen` with a complete HTML mockup or focused UI fragment.
+3. Give the returned URL to the user.
+4. If feedback is needed, use `wait_for_selection` or `read_events`.
+
+Do not search MCP resources first for visual-companion. It is primarily a
+tool-oriented MCP server.
+```
 
 ## Tool Overview
 

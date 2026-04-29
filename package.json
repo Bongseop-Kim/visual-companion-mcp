@@ -10,7 +10,9 @@
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "build": "bun build ./src/index.ts --outdir ./dist --target bun",
-    "compile": "bun build ./src/index.ts --compile --outfile ./visual-companion-mcp"
+    "compile": "bun build ./src/index.ts --compile --outfile ./visual-companion-mcp",
+    "install:codex": "node ./scripts/install-codex.mjs",
+    "probe:mcp": "node ./scripts/probe-mcp.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.17.4",
