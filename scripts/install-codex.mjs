@@ -1,18 +1,11 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
+import { resolveBinary } from "./_shared.mjs";
 
-const repoDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const binaryPath = resolve(repoDir, "visual-companion-mcp");
+const { repoDir, binaryPath } = resolveBinary(import.meta.url);
 const codexHome = process.env.CODEX_HOME || resolve(homedir(), ".codex");
 const configPath = resolve(codexHome, "config.toml");
-
-if (!existsSync(binaryPath)) {
-  console.error(`Missing binary: ${binaryPath}`);
-  console.error("Run `bun install` and `bun run compile` first.");
-  process.exit(1);
-}
 
 mkdirSync(codexHome, { recursive: true });
 

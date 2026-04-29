@@ -5,3 +5,4 @@ visual-companion-mcp
 coverage/
 *.log
 .*.bun-build
+.claude/

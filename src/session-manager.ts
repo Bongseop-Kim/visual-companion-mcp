@@ -26,22 +26,17 @@ type ShowScreenWithSummaryInput = ShowScreenInput & {
 
 interface Session {
   id: string;
-  host: string;
-  urlHost: string;
   port: number;
   url: string;
   workDir: string;
   screenDir: string;
   eventsPath: string;
   server: Bun.Server<unknown>;
-  wsTopic: string;
   clients: Set<Client>;
-  currentFilename: string | null;
   currentHtml: string;
   screenVersion: number;
   currentWireframeSummaryPath: string | null;
-  currentWireframeSummaryFilename: string | null;
-  currentWireframeSummaryVersion: number | null;
+  recentEvents: CompanionEvent[];
   waiters: Set<(event: CompanionEvent) => void>;
 }
 
@@ -55,10 +50,12 @@ export class SessionManager {
     const workDir = join(baseDir, sessionId);
     const screenDir = join(workDir, "screens");
     const eventsPath = join(workDir, "events.jsonl");
-    const wsTopic = `session:${sessionId}`;
     const initialHtml = readyScreenHtml(sessionId);
-    await mkdir(screenDir, { recursive: true });
-    await writeFile(eventsPath, "", { flag: "a" });
+    await mkdir(workDir, { recursive: true });
+    await Promise.all([
+      mkdir(screenDir, { recursive: true }),
+      writeFile(eventsPath, "", { flag: "a" }),
+    ]);
 
     const clients = new Set<Client>();
     const waiters = new Set<(event: CompanionEvent) => void>();
@@ -81,14 +78,13 @@ export class SessionManager {
           return Response.json({ ok: true, sessionId });
         }
 
-        return new Response(currentScreenHtml(session), {
+        return new Response(session.currentHtml, {
           headers: { "content-type": "text/html; charset=utf-8" },
         });
       },
       websocket: {
         open(ws) {
           clients.add(ws);
-          ws.subscribe(wsTopic);
         },
         close(ws) {
           clients.delete(ws);
@@ -99,6 +95,7 @@ export class SessionManager {
           const versionedEvent =
             event.screenVersion === undefined ? { ...event, screenVersion: session.screenVersion } : event;
           await appendEvent(eventsPath, versionedEvent);
+          session.recentEvents.push(versionedEvent);
           for (const waiter of waiters) waiter(versionedEvent);
         },
         perMessageDeflate: true,
@@ -116,22 +113,17 @@ export class SessionManager {
     }
     session = {
       id: sessionId,
-      host: options.host,
-      urlHost: options.urlHost,
       port,
       url: `http://${options.urlHost}:${port}`,
       workDir,
       screenDir,
       eventsPath,
       server,
-      wsTopic,
       clients,
-      currentFilename: null,
       currentHtml: initialHtml,
       screenVersion: 0,
       currentWireframeSummaryPath: null,
-      currentWireframeSummaryFilename: null,
-      currentWireframeSummaryVersion: null,
+      recentEvents: [],
       waiters,
     };
     this.sessions.set(sessionId, session);
@@ -142,7 +134,7 @@ export class SessionManager {
         {
           sessionId,
           url: session.url,
-          host: session.host,
+          host: options.host,
           port: session.port,
           workDir,
           eventsPath,
@@ -156,7 +148,7 @@ export class SessionManager {
     return {
       sessionId,
       url: session.url,
-      host: session.host,
+      host: options.host,
       port: session.port,
       workDir,
       eventsPath,
@@ -172,6 +164,7 @@ export class SessionManager {
     };
     if (options.clearEvents) {
       await readEvents(session.eventsPath, { clear: true });
+      session.recentEvents = [];
     }
     const filename = sanitizeFilename(input.filename);
     const filePath = join(session.screenDir, filename);
@@ -183,7 +176,6 @@ export class SessionManager {
     });
     await writeFile(filePath, rendered, "utf8");
     await writeFile(join(session.workDir, "current-screen"), filename, "utf8");
-    session.currentFilename = filename;
     session.currentHtml = rendered;
     session.screenVersion = screenVersion;
     const wireframeSummaryPath = input.wireframeSummary
@@ -191,19 +183,9 @@ export class SessionManager {
       : undefined;
 
     const delivery = resolveDelivery(options.delivery, input.html);
-    const message =
-      delivery === "patch-html"
-        ? {
-            type: "patch-html",
-            sessionId: session.id,
-            screenVersion,
-            selector: options.patchSelector,
-            html: input.html,
-          }
-        : delivery === "replace-body"
-          ? { type: "replace-body", sessionId: session.id, screenVersion, html: bodyHtml(input.html) }
-          : { type: "reload", sessionId: session.id, screenVersion };
-    session.server.publish(session.wsTopic, JSON.stringify(message));
+    const message = buildDeliveryMessage(delivery, session.id, screenVersion, input.html, options.patchSelector);
+    const payload = JSON.stringify(message);
+    for (const client of session.clients) client.send(payload);
     const updatedClients = session.clients.size;
     const reloadedClients = delivery === "reload" ? updatedClients : 0;
 
@@ -212,7 +194,11 @@ export class SessionManager {
 
   async readEvents(input: { sessionId: string; clear?: boolean }): Promise<CompanionEvent[]> {
     const session = this.getSession(input.sessionId);
-    return readEvents(session.eventsPath, { clear: input.clear ?? false });
+    const events = await readEvents(session.eventsPath, { clear: input.clear ?? false });
+    if (input.clear) {
+      session.recentEvents = [];
+    }
+    return events;
   }
 
   async waitForSelection(input: WaitForSelectionInput): Promise<WaitForSelectionOutput> {
@@ -222,18 +208,22 @@ export class SessionManager {
       sinceScreenVersion: input.sinceScreenVersion,
     };
     const session = this.getSession(parsed.sessionId);
-    const existing = filterEvents(await readEvents(session.eventsPath), parsed.sinceScreenVersion);
+    const existing = filterEvents(session.recentEvents, parsed.sinceScreenVersion);
     if (existing.length > 0) {
       return { events: existing, timedOut: false };
     }
 
     return new Promise((resolve) => {
-      const onEvent = async () => {
-        const events = filterEvents(await readEvents(session.eventsPath), parsed.sinceScreenVersion);
-        if (events.length === 0) return;
+      const onEvent = (event: CompanionEvent) => {
+        if (
+          parsed.sinceScreenVersion !== undefined &&
+          (event.screenVersion ?? 0) < parsed.sinceScreenVersion
+        ) {
+          return;
+        }
         clearTimeout(timeout);
         session.waiters.delete(onEvent);
-        resolve({ events, timedOut: false });
+        resolve({ events: [event], timedOut: false });
       };
       const timeout = setTimeout(() => {
         session.waiters.delete(onEvent);
@@ -255,13 +245,12 @@ export class SessionManager {
       filename?: string;
       wireframeSummary?: unknown;
     };
-    const screenVersion = parsed.screenVersion ?? session.currentWireframeSummaryVersion ?? undefined;
-    const events = filterEventsForScreenVersion(await readEvents(session.eventsPath), screenVersion);
+    const events = filterEventsForScreenVersion(await readEvents(session.eventsPath), parsed.screenVersion);
 
     return {
       sessionId: session.id,
-      screenVersion,
-      filename: parsed.filename ?? session.currentWireframeSummaryFilename ?? undefined,
+      screenVersion: parsed.screenVersion,
+      filename: parsed.filename,
       wireframeSummary: wireframeSummarySchema.parse(parsed.wireframeSummary),
       wireframeSummaryPath: session.currentWireframeSummaryPath,
       events,
@@ -315,14 +304,25 @@ export class SessionManager {
     );
     await writeFile(join(session.workDir, "current-wireframe-summary"), summaryFilename, "utf8");
     session.currentWireframeSummaryPath = summaryPath;
-    session.currentWireframeSummaryFilename = filename;
-    session.currentWireframeSummaryVersion = screenVersion;
     return summaryPath;
   }
 }
 
-function currentScreenHtml(session: Session): string {
-  return session.currentHtml;
+function buildDeliveryMessage(
+  delivery: "reload" | "patch-html" | "replace-body",
+  sessionId: string,
+  screenVersion: number,
+  html: string,
+  patchSelector: string,
+) {
+  switch (delivery) {
+    case "patch-html":
+      return { type: "patch-html" as const, sessionId, screenVersion, selector: patchSelector, html };
+    case "replace-body":
+      return { type: "replace-body" as const, sessionId, screenVersion, html: bodyHtml(html) };
+    case "reload":
+      return { type: "reload" as const, sessionId, screenVersion };
+  }
 }
 
 function readyScreenHtml(sessionId: string): string {

@@ -4,8 +4,7 @@ import { eventSchema, type CompanionEvent } from "./schemas";
 
 export async function appendEvent(filePath: string, event: CompanionEvent): Promise<void> {
   await mkdir(dirname(filePath), { recursive: true });
-  const parsed = eventSchema.parse(event);
-  await appendFile(filePath, `${JSON.stringify(parsed)}\n`, "utf8");
+  await appendFile(filePath, `${JSON.stringify(event)}\n`, "utf8");
 }
 
 export async function readEvents(

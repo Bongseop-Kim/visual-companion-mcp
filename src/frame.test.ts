@@ -12,7 +12,7 @@ describe("renderScreenHtml", () => {
     expect(html).toContain("<!doctype html>");
     expect(html).toContain('<main class="vc-frame">');
     expect(html).toContain("<h2>Hello</h2>");
-    expect(html).toContain('data-session-id="session-&quot;&lt;id>"');
+    expect(html).toContain('data-session-id="session-&quot;&lt;id&gt;"');
     expect(html).toContain('data-screen-version="4"');
     expect(html).toContain("new WebSocket");
   });

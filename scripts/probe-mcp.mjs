@@ -1,17 +1,10 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { existsSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolveBinary } from "./_shared.mjs";
 
-const repoDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const binaryPath = resolve(repoDir, "visual-companion-mcp");
-
-if (!existsSync(binaryPath)) {
-  console.error(`Missing binary: ${binaryPath}`);
-  console.error("Run `bun run compile` first.");
-  process.exit(1);
-}
+const { repoDir, binaryPath } = resolveBinary(import.meta.url, {
+  hint: "Run `bun run compile` first.",
+});
 
 const client = new Client({ name: "visual-companion-probe", version: "0.1.0" });
 const transport = new StdioClientTransport({

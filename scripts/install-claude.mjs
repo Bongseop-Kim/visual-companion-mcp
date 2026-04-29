@@ -1,17 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolveBinary } from "./_shared.mjs";
 
-const repoDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const binaryPath = resolve(repoDir, "visual-companion-mcp");
+const { repoDir, binaryPath } = resolveBinary(import.meta.url);
 const scope = process.argv.includes("--project") ? "project" : "user";
-
-if (!existsSync(binaryPath)) {
-  console.error(`Missing binary: ${binaryPath}`);
-  console.error("Run `bun install` and `bun run compile` first.");
-  process.exit(1);
-}
 
 const result = spawnSync(
   "claude",

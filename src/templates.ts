@@ -1,10 +1,12 @@
-import type {
-  RequestUserInput,
-  ShowCardsInput,
-  ShowChoiceGridInput,
-  ShowComparisonInput,
-  ShowOptionsInput,
-  ShowWireframeInput,
+import { escapeHtml, escapeHtmlAttribute } from "./frame";
+import {
+  DEFAULT_REQUESTED_SCHEMA,
+  type RequestUserInput,
+  type ShowCardsInput,
+  type ShowChoiceGridInput,
+  type ShowComparisonInput,
+  type ShowOptionsInput,
+  type ShowWireframeInput,
 } from "./schemas";
 
 export function renderOptionsTemplate(input: ShowOptionsInput): string {
@@ -19,7 +21,7 @@ export function renderCardsTemplate(input: ShowCardsInput): string {
 <div class="cards">
   ${input.cards
     .map(
-      (card) => `<article class="card" data-choice="${escapeHtmlAttribute(card.id)}" data-text="${escapeHtmlAttribute(card.title)}" onclick="toggleSelect(this)">
+      (card) => `<article class="card" ${selectableAttrs(card.id, card.title)}>
     <div class="card-image placeholder">${escapeHtml(card.imageLabel ?? card.title)}</div>
     <div class="card-body">
       <h3>${escapeHtml(card.title)}</h3>
@@ -37,7 +39,7 @@ export function renderChoiceGridTemplate(input: ShowChoiceGridInput): string {
 <div class="choice-grid">
   ${input.choices
     .map(
-      (choice) => `<article class="choice-card" data-choice="${escapeHtmlAttribute(choice.choiceId)}" data-text="${escapeHtmlAttribute(choice.title)}" onclick="toggleSelect(this)">
+      (choice) => `<article class="choice-card" ${selectableAttrs(choice.choiceId, choice.title)}>
     <div class="choice-thumb">${choice.thumbHtml ?? `<div class="placeholder">${escapeHtml(choice.title)}</div>`}</div>
     <div class="choice-body">
       <div class="choice-title-row">
@@ -57,7 +59,7 @@ export function renderComparisonTemplate(input: ShowComparisonInput): string {
 <div class="cards">
   ${input.items
     .map(
-      (item) => `<article class="card" data-choice="${escapeHtmlAttribute(item.id)}" data-text="${escapeHtmlAttribute(item.title)}" onclick="toggleSelect(this)">
+      (item) => `<article class="card" ${selectableAttrs(item.id, item.title)}>
     <div class="card-body">
       <h3>${escapeHtml(item.title)}</h3>
       ${item.description ? `<p>${escapeHtml(item.description)}</p>` : ""}
@@ -81,15 +83,10 @@ export function renderComparisonTemplate(input: ShowComparisonInput): string {
 
 export function renderWireframeTemplate(input: ShowWireframeInput): string {
   const sections = input.sections.length > 0 ? input.sections : ["Navigation", "Hero", "Content", "Actions"];
-  const body =
-    input.variant === "mobile"
-      ? renderMobileWireframe(sections)
-      : input.variant === "split"
-        ? renderSplitWireframe(sections)
-        : renderDesktopWireframe(sections);
+  const body = WIREFRAME_RENDERERS[input.variant](sections);
 
   return `${renderHeading(input.title, input.subtitle)}
-<div class="mockup" data-choice="${escapeHtmlAttribute(input.choice)}" data-text="${escapeHtmlAttribute(input.title)}" onclick="toggleSelect(this)">
+<div class="mockup" ${selectableAttrs(input.choice, input.title)}>
   <div class="mockup-header">${escapeHtml(input.variant)} wireframe</div>
   <div class="mockup-body">${body}</div>
 </div>`;
@@ -142,7 +139,7 @@ function renderOption(
   option: { id: string; title: string; description?: string | undefined; details: string[] },
   letter: string,
 ): string {
-  return `<div class="option" data-choice="${escapeHtmlAttribute(option.id)}" data-text="${escapeHtmlAttribute(option.title)}" onclick="toggleSelect(this)">
+  return `<div class="option" ${selectableAttrs(option.id, option.title)}>
     <div class="letter">${escapeHtml(letter)}</div>
     <div class="content">
       <h3>${escapeHtml(option.title)}</h3>
@@ -183,6 +180,16 @@ function renderSplitWireframe(sections: string[]): string {
 </div>`;
 }
 
+const WIREFRAME_RENDERERS: Record<ShowWireframeInput["variant"], (sections: string[]) => string> = {
+  desktop: renderDesktopWireframe,
+  mobile: renderMobileWireframe,
+  split: renderSplitWireframe,
+};
+
+function selectableAttrs(choiceId: string, text: string): string {
+  return `data-choice="${escapeHtmlAttribute(choiceId)}" data-text="${escapeHtmlAttribute(text)}" onclick="toggleSelect(this)"`;
+}
+
 function renderField(name: string, field: FormField, required: boolean): string {
   const label = escapeHtml(field.title ?? name);
   const description = field.description ? `<p>${escapeHtml(field.description)}</p>` : "";
@@ -215,13 +222,8 @@ interface FormField {
 function normalizeFormSchema(schema: RequestUserInput["requestedSchema"]): FormSchema {
   if (!schema || schema.type !== "object" || typeof schema.properties !== "object") {
     return {
-      properties: {
-        response: {
-          type: "string",
-          title: "Response",
-        },
-      },
-      required: ["response"],
+      properties: DEFAULT_REQUESTED_SCHEMA.properties,
+      required: DEFAULT_REQUESTED_SCHEMA.required,
     };
   }
 
@@ -233,16 +235,4 @@ function normalizeFormSchema(schema: RequestUserInput["requestedSchema"]): FormS
 
 function letterFor(index: number): string {
   return String.fromCharCode("A".charCodeAt(0) + index);
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
-}
-
-function escapeHtmlAttribute(value: string): string {
-  return escapeHtml(value).replaceAll("'", "&#39;");
 }

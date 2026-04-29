@@ -201,6 +201,17 @@ export const requestUserInputOutputSchema = z.object({
   timedOut: z.boolean().optional(),
 });
 
+export const DEFAULT_REQUESTED_SCHEMA = {
+  type: "object" as const,
+  properties: {
+    response: {
+      type: "string" as const,
+      title: "Response",
+    },
+  },
+  required: ["response"],
+};
+
 export type CompanionEvent = z.infer<typeof eventSchema>;
 export type StartSessionInput = z.input<typeof startSessionInputSchema>;
 export type StartSessionOutput = z.infer<typeof startSessionOutputSchema>;

@@ -255,6 +255,14 @@ p { line-height: 1.55; }
 `.trim();
 }
 
-function escapeHtmlAttribute(value: string): string {
-  return value.replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;");
+export function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+export function escapeHtmlAttribute(value: string): string {
+  return escapeHtml(value).replaceAll("'", "&#39;");
 }

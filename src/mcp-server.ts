@@ -4,6 +4,7 @@ import type { ElicitRequestFormParams, ElicitRequestURLParams } from "@modelcont
 import { z } from "zod";
 import { SessionManager } from "./session-manager";
 import {
+  DEFAULT_REQUESTED_SCHEMA,
   readEventsInputSchema,
   readEventsOutputSchema,
   readCurrentWireframeSummaryInputSchema,
@@ -229,13 +230,12 @@ async function requestUserInput(
   manager: SessionManager,
   input: RequestUserInput,
 ): Promise<RequestUserInputOutput> {
-  if (input.sensitive && input.modePreference !== "url") {
-    if (input.modePreference !== "auto") {
-      throw new Error("Sensitive input must use URL mode elicitation.");
-    }
-    if (!input.url) {
-      throw new Error("Sensitive input requires a URL for URL mode elicitation.");
-    }
+  if (input.sensitive && input.modePreference !== "url" && input.modePreference !== "auto") {
+    throw new Error("Sensitive input must use URL mode elicitation.");
+  }
+
+  if (input.modePreference === "browser") {
+    return requestBrowserInput(manager, input);
   }
 
   if (input.modePreference === "url" || (input.modePreference === "auto" && input.sensitive)) {
@@ -303,16 +303,7 @@ async function requestBrowserInput(
 
 function normalizeRequestedSchema(schema: RequestUserInput["requestedSchema"]): ElicitRequestFormParams["requestedSchema"] {
   if (!schema) {
-    return {
-      type: "object",
-      properties: {
-        response: {
-          type: "string",
-          title: "Response",
-        },
-      },
-      required: ["response"],
-    };
+    return DEFAULT_REQUESTED_SCHEMA as ElicitRequestFormParams["requestedSchema"];
   }
   return schema as ElicitRequestFormParams["requestedSchema"];
 }
