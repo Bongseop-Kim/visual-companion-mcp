@@ -104,17 +104,24 @@ function helperScript(sessionId: string): string {
 
   function recordInteraction(element) {
     if (!element || !element.dataset.choice) return;
-    const payload = {
+    window.recordCompanionEvent({
       type: element.dataset.type || "click",
       choice: element.dataset.choice,
       text: eventText(element),
+    });
+  }
+
+  window.recordCompanionEvent = function recordCompanionEvent(payload) {
+    if (!payload || typeof payload !== "object") return;
+    const eventPayload = {
+      ...payload,
       timestamp: Date.now(),
       dwellMs: Date.now() - startedAt,
     };
     if (socket && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify(payload));
+      socket.send(JSON.stringify(eventPayload));
     }
-  }
+  };
 
   function updateIndicator() {
     const indicator = document.getElementById("vc-indicator");

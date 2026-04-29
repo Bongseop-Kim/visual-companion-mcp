@@ -27,8 +27,13 @@ tool_timeout_sec = 120
 enabled_tools = [
   "start_session",
   "show_screen",
+  "show_options",
+  "show_cards",
+  "show_comparison",
+  "show_wireframe",
   "read_events",
   "wait_for_selection",
+  "request_user_input",
   "stop_session",
 ]
 `;

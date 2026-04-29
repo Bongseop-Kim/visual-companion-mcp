@@ -6,11 +6,16 @@ It is designed for visual collaboration loops such as layout choices, wireframes
 
 ## Features
 
-- MCP stdio server with five tools:
+- MCP stdio server with template, input, and session tools:
   - `start_session`
   - `show_screen`
+  - `show_options`
+  - `show_cards`
+  - `show_comparison`
+  - `show_wireframe`
   - `read_events`
   - `wait_for_selection`
+  - `request_user_input`
   - `stop_session`
 - Bun HTTP + WebSocket runtime.
 - Fragment auto-wrap: HTML fragments are wrapped in a built-in frame template.
@@ -142,8 +147,13 @@ tool_timeout_sec = 120
 enabled_tools = [
   "start_session",
   "show_screen",
+  "show_options",
+  "show_cards",
+  "show_comparison",
+  "show_wireframe",
   "read_events",
   "wait_for_selection",
+  "request_user_input",
   "stop_session",
 ]
 ```
@@ -166,8 +176,13 @@ Expected output:
   "tools": [
     "start_session",
     "show_screen",
+    "show_options",
+    "show_cards",
+    "show_comparison",
+    "show_wireframe",
     "read_events",
     "wait_for_selection",
+    "request_user_input",
     "stop_session"
   ],
   "resources": [
@@ -177,7 +192,11 @@ Expected output:
     }
   ],
   "prompts": [
-    "show_visual_draft"
+    "show_visual_draft",
+    "compare_two_layouts",
+    "collect_design_feedback",
+    "review_mobile_desktop",
+    "choose_visual_direction"
   ]
 }
 ```
@@ -185,7 +204,7 @@ Expected output:
 This server also exposes a discovery resource and prompt so tool-oriented clients can find the intended workflow even if they inspect resources or prompts before tools:
 
 - Resource: `visual-companion://usage`
-- Prompt: `show_visual_draft`
+- Prompts: `show_visual_draft`, `compare_two_layouts`, `collect_design_feedback`, `review_mobile_desktop`, `choose_visual_direction`
 
 For projects where visual review is common, add this to the project `AGENTS.md`:
 
@@ -198,7 +217,8 @@ MCP server immediately.
 
 Use this flow:
 1. Call `start_session`.
-2. Call `show_screen` with a complete HTML mockup or focused UI fragment.
+2. Call `show_screen` with a complete HTML mockup, or use `show_options`,
+   `show_cards`, `show_comparison`, or `show_wireframe` for template screens.
 3. Give the returned URL to the user.
 4. If feedback is needed, use `wait_for_selection` or `read_events`.
 
@@ -227,6 +247,22 @@ The tool does not open the browser automatically. The agent should show the retu
 
 Writes and displays a screen for the session. If `html` does not start with `<!doctype` or `<html`, it is treated as a fragment and wrapped with the default frame.
 
+### `show_options({ sessionId, filename, title, subtitle?, options, multiselect? })`
+
+Writes and displays a selectable option list. Each option needs `id` and `title`, with optional `description` and `details`.
+
+### `show_cards({ sessionId, filename, title, subtitle?, cards })`
+
+Writes and displays selectable cards. Each card needs `id` and `title`, with optional `description`, `details`, and `imageLabel`.
+
+### `show_comparison({ sessionId, filename, title, subtitle?, items })`
+
+Writes and displays a selectable comparison. Each item supports `description`, `details`, `pros`, and `cons`.
+
+### `show_wireframe({ sessionId, filename, title, subtitle?, variant?, sections? })`
+
+Writes and displays a selectable wireframe. `variant` can be `desktop`, `mobile`, or `split`.
+
 ### `read_events({ sessionId, clear? })`
 
 Reads click events from the session JSONL file. Use `clear: true` to empty the file after reading.
@@ -234,6 +270,10 @@ Reads click events from the session JSONL file. Use `clear: true` to empty the f
 ### `wait_for_selection({ sessionId, timeoutMs? })`
 
 Waits for a click event to arrive. It returns existing unread events immediately, otherwise waits until the timeout.
+
+### `request_user_input({ modePreference?, message, requestedSchema?, sensitive?, url?, sessionId? })`
+
+Requests structured input with MCP Elicitation when available. `auto` first tries non-sensitive form elicitation and falls back to a browser form when `sessionId` is provided. Sensitive input must use URL mode and provide `url`.
 
 ### `stop_session({ sessionId })`
 
