@@ -29,10 +29,12 @@ enabled_tools = [
   "show_screen",
   "show_options",
   "show_cards",
+  "show_choice_grid",
   "show_comparison",
   "show_wireframe",
   "read_events",
   "wait_for_selection",
+  "read_current_wireframe_summary",
   "request_user_input",
   "stop_session",
 ]

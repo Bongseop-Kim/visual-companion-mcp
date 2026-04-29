@@ -1,6 +1,7 @@
 import type {
   RequestUserInput,
   ShowCardsInput,
+  ShowChoiceGridInput,
   ShowComparisonInput,
   ShowOptionsInput,
   ShowWireframeInput,
@@ -24,6 +25,26 @@ export function renderCardsTemplate(input: ShowCardsInput): string {
       <h3>${escapeHtml(card.title)}</h3>
       ${card.description ? `<p>${escapeHtml(card.description)}</p>` : ""}
       ${renderDetails(card.details)}
+    </div>
+  </article>`,
+    )
+    .join("\n")}
+</div>`;
+}
+
+export function renderChoiceGridTemplate(input: ShowChoiceGridInput): string {
+  return `${renderHeading(input.title, input.subtitle)}
+<div class="choice-grid">
+  ${input.choices
+    .map(
+      (choice) => `<article class="choice-card" data-choice="${escapeHtmlAttribute(choice.choiceId)}" data-text="${escapeHtmlAttribute(choice.title)}" onclick="toggleSelect(this)">
+    <div class="choice-thumb">${choice.thumbHtml ?? `<div class="placeholder">${escapeHtml(choice.title)}</div>`}</div>
+    <div class="choice-body">
+      <div class="choice-title-row">
+        <h3>${escapeHtml(choice.title)}</h3>
+        ${choice.badge ? `<span class="choice-badge">${escapeHtml(choice.badge)}</span>` : ""}
+      </div>
+      ${renderDetails(choice.bullets)}
     </div>
   </article>`,
     )

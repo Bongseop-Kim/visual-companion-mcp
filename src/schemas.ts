@@ -9,6 +9,7 @@ export const eventSchema = z.object({
     .optional(),
   timestamp: z.number(),
   dwellMs: z.number().optional(),
+  screenVersion: z.number().int().min(0).optional(),
 });
 
 export const startSessionInputSchema = z.object({
@@ -31,12 +32,45 @@ export const showScreenInputSchema = z.object({
   sessionId: z.string().min(1),
   filename: z.string().min(1),
   html: z.string(),
+  delivery: z.enum(["auto", "reload", "patch-html", "replace-body"]).default("auto"),
+  patchSelector: z.string().min(1).default(".vc-frame"),
+  clearEvents: z.boolean().default(false),
 });
 
 export const showScreenOutputSchema = z.object({
   sessionId: z.string(),
   filePath: z.string(),
   reloadedClients: z.number(),
+  updatedClients: z.number(),
+  screenVersion: z.number().int().min(0),
+  wireframeSummaryPath: z.string().optional(),
+});
+
+const wireframeRegionSummarySchema = z.object({
+  id: z.string().min(1),
+  label: z.string().optional(),
+  role: z.string().optional(),
+  priority: z.enum(["primary", "secondary", "supporting"]).optional(),
+  contains: z.array(z.string()).default([]),
+});
+
+const wireframeChoiceSummarySchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  description: z.string().optional(),
+});
+
+export const wireframeSummarySchema = z.object({
+  screenPurpose: z.string().min(1),
+  layoutPattern: z.string().min(1),
+  viewport: z.enum(["desktop", "mobile", "split", "responsive"]).optional(),
+  primaryRegion: z.string().optional(),
+  secondaryRegions: z.array(z.string()).default([]),
+  regions: z.array(wireframeRegionSummarySchema).default([]),
+  primaryAction: z.string().optional(),
+  choices: z.array(wireframeChoiceSummarySchema).default([]),
+  notes: z.array(z.string()).default([]),
+  constraints: z.array(z.string()).default([]),
 });
 
 const selectableItemSchema = z.object({
@@ -51,6 +85,7 @@ const screenBaseSchema = z.object({
   filename: z.string().min(1),
   title: z.string().min(1),
   subtitle: z.string().optional(),
+  clearEvents: z.boolean().default(true),
 });
 
 export const showOptionsInputSchema = screenBaseSchema.extend({
@@ -68,6 +103,21 @@ export const showCardsInputSchema = screenBaseSchema.extend({
     .min(1),
 });
 
+export const showChoiceGridInputSchema = screenBaseSchema.extend({
+  choices: z
+    .array(
+      z.object({
+        choiceId: z.string().min(1),
+        title: z.string().min(1),
+        thumbHtml: z.string().optional(),
+        bullets: z.array(z.string()).default([]),
+        badge: z.string().optional(),
+      }),
+    )
+    .min(1),
+  wireframeSummary: wireframeSummarySchema.optional(),
+});
+
 export const comparisonItemSchema = selectableItemSchema.extend({
   pros: z.array(z.string()).default([]),
   cons: z.array(z.string()).default([]),
@@ -81,6 +131,20 @@ export const showWireframeInputSchema = screenBaseSchema.extend({
   variant: z.enum(["desktop", "mobile", "split"]).default("desktop"),
   choice: z.string().default("wireframe"),
   sections: z.array(z.string()).default(["Navigation", "Hero", "Content", "Actions"]),
+  wireframeSummary: wireframeSummarySchema.optional(),
+});
+
+export const readCurrentWireframeSummaryInputSchema = z.object({
+  sessionId: z.string().min(1),
+});
+
+export const readCurrentWireframeSummaryOutputSchema = z.object({
+  sessionId: z.string(),
+  screenVersion: z.number().int().min(0).optional(),
+  filename: z.string().optional(),
+  wireframeSummary: wireframeSummarySchema.optional(),
+  wireframeSummaryPath: z.string().optional(),
+  events: z.array(eventSchema).default([]),
 });
 
 export const readEventsInputSchema = z.object({
@@ -95,6 +159,7 @@ export const readEventsOutputSchema = z.object({
 export const waitForSelectionInputSchema = z.object({
   sessionId: z.string().min(1),
   timeoutMs: z.number().int().min(1).max(300_000).default(60_000),
+  sinceScreenVersion: z.number().int().min(0).optional(),
 });
 
 export const waitForSelectionOutputSchema = z.object({
@@ -139,12 +204,15 @@ export const requestUserInputOutputSchema = z.object({
 export type CompanionEvent = z.infer<typeof eventSchema>;
 export type StartSessionInput = z.input<typeof startSessionInputSchema>;
 export type StartSessionOutput = z.infer<typeof startSessionOutputSchema>;
-export type ShowScreenInput = z.infer<typeof showScreenInputSchema>;
+export type ShowScreenInput = z.input<typeof showScreenInputSchema>;
 export type ShowScreenOutput = z.infer<typeof showScreenOutputSchema>;
+export type WireframeSummary = z.infer<typeof wireframeSummarySchema>;
 export type ShowOptionsInput = z.infer<typeof showOptionsInputSchema>;
 export type ShowCardsInput = z.infer<typeof showCardsInputSchema>;
+export type ShowChoiceGridInput = z.infer<typeof showChoiceGridInputSchema>;
 export type ShowComparisonInput = z.infer<typeof showComparisonInputSchema>;
 export type ShowWireframeInput = z.infer<typeof showWireframeInputSchema>;
+export type ReadCurrentWireframeSummaryOutput = z.infer<typeof readCurrentWireframeSummaryOutputSchema>;
 export type ReadEventsInput = z.input<typeof readEventsInputSchema>;
 export type WaitForSelectionInput = z.input<typeof waitForSelectionInputSchema>;
 export type WaitForSelectionOutput = z.infer<typeof waitForSelectionOutputSchema>;

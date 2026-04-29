@@ -11,10 +11,12 @@ It is designed for visual collaboration loops such as layout choices, wireframes
   - `show_screen`
   - `show_options`
   - `show_cards`
+  - `show_choice_grid`
   - `show_comparison`
   - `show_wireframe`
   - `read_events`
   - `wait_for_selection`
+  - `read_current_wireframe_summary`
   - `request_user_input`
   - `stop_session`
 - Bun HTTP + WebSocket runtime.
@@ -22,7 +24,9 @@ It is designed for visual collaboration loops such as layout choices, wireframes
 - Full HTML documents are served as-is with the helper script injected.
 - Click events are stored as JSONL on disk.
 - Multiple sessions can run in one MCP process on separate local ports.
-- Built-in CSS classes for common visual patterns: `.options`, `.cards`, `.mockup`, `.split`, `.pros-cons`.
+- Fast choice templates for common selection loops; use `show_choice_grid`, `show_options`, `show_cards`, or `show_comparison` before falling back to raw `show_screen`.
+- Optional lightweight wireframe summaries can be saved beside wireframe screens and read back as structured MCP output.
+- Built-in CSS classes for common visual patterns: `.options`, `.cards`, `.choice-grid`, `.mockup`, `.split`, `.pros-cons`.
 
 ## Install
 
@@ -149,10 +153,12 @@ enabled_tools = [
   "show_screen",
   "show_options",
   "show_cards",
+  "show_choice_grid",
   "show_comparison",
   "show_wireframe",
   "read_events",
   "wait_for_selection",
+  "read_current_wireframe_summary",
   "request_user_input",
   "stop_session",
 ]
@@ -178,10 +184,12 @@ Expected output:
     "show_screen",
     "show_options",
     "show_cards",
+    "show_choice_grid",
     "show_comparison",
     "show_wireframe",
     "read_events",
     "wait_for_selection",
+    "read_current_wireframe_summary",
     "request_user_input",
     "stop_session"
   ],
@@ -217,10 +225,13 @@ MCP server immediately.
 
 Use this flow:
 1. Call `start_session`.
-2. Call `show_screen` with a complete HTML mockup, or use `show_options`,
-   `show_cards`, `show_comparison`, or `show_wireframe` for template screens.
+2. For fast choices, prefer `show_choice_grid`, `show_options`, `show_cards`,
+   or `show_comparison`; use `show_screen` for custom HTML.
 3. Give the returned URL to the user.
-4. If feedback is needed, use `wait_for_selection` or `read_events`.
+4. If feedback is needed, use `wait_for_selection` with the returned
+   `screenVersion` as `sinceScreenVersion`, or use `read_events`.
+5. For wireframe handoff, call `read_current_wireframe_summary` after a
+   `show_wireframe` or `show_choice_grid` call that saved `wireframeSummary`.
 
 Do not search MCP resources first for visual-companion. It is primarily a
 tool-oriented MCP server.
@@ -243,33 +254,51 @@ Returns `sessionId`, `url`, `host`, `port`, `workDir`, and `eventsPath`.
 
 The tool does not open the browser automatically. The agent should show the returned URL to the user.
 
-### `show_screen({ sessionId, filename, html })`
+### `show_screen({ sessionId, filename, html, delivery?, patchSelector?, clearEvents? })`
 
 Writes and displays a screen for the session. If `html` does not start with `<!doctype` or `<html`, it is treated as a fragment and wrapped with the default frame.
 
-### `show_options({ sessionId, filename, title, subtitle?, options, multiselect? })`
+By default, fragments are sent to the browser with a live `patch-html` update against `.vc-frame`, while full HTML documents reload the page. Use `delivery: "reload"` to force a reload, `delivery: "patch-html"` to patch a selector, or `delivery: "replace-body"` to replace the body contents. `clearEvents` defaults to `false` for raw screens.
+
+Returns `screenVersion`; pass it to `wait_for_selection({ sinceScreenVersion })` to ignore stale selections from earlier screens.
+
+### `show_options({ sessionId, filename, title, subtitle?, options, multiselect?, clearEvents? })`
 
 Writes and displays a selectable option list. Each option needs `id` and `title`, with optional `description` and `details`.
 
-### `show_cards({ sessionId, filename, title, subtitle?, cards })`
+Choice-oriented template tools clear previous events by default.
+
+### `show_cards({ sessionId, filename, title, subtitle?, cards, clearEvents? })`
 
 Writes and displays selectable cards. Each card needs `id` and `title`, with optional `description`, `details`, and `imageLabel`.
 
-### `show_comparison({ sessionId, filename, title, subtitle?, items })`
+### `show_choice_grid({ sessionId, filename, title, subtitle?, choices, clearEvents?, wireframeSummary? })`
+
+Writes and displays a dense visual choice grid for fast option picking. Each choice needs `choiceId` and `title`, with optional `thumbHtml`, `bullets`, and `badge`.
+
+When `wireframeSummary` is provided, the server saves it beside the rendered HTML as `{filename}.wireframe-summary.json` and returns `wireframeSummaryPath`.
+
+### `show_comparison({ sessionId, filename, title, subtitle?, items, clearEvents? })`
 
 Writes and displays a selectable comparison. Each item supports `description`, `details`, `pros`, and `cons`.
 
-### `show_wireframe({ sessionId, filename, title, subtitle?, variant?, sections? })`
+### `show_wireframe({ sessionId, filename, title, subtitle?, variant?, sections?, clearEvents?, wireframeSummary? })`
 
 Writes and displays a selectable wireframe. `variant` can be `desktop`, `mobile`, or `split`.
+
+`wireframeSummary` is a lightweight structure handoff, not a design spec. Keep it to screen purpose, layout pattern, regions, primary action, choices, notes, and constraints.
 
 ### `read_events({ sessionId, clear? })`
 
 Reads click events from the session JSONL file. Use `clear: true` to empty the file after reading.
 
-### `wait_for_selection({ sessionId, timeoutMs? })`
+### `wait_for_selection({ sessionId, timeoutMs?, sinceScreenVersion? })`
 
-Waits for a click event to arrive. It returns existing unread events immediately, otherwise waits until the timeout.
+Waits for a click event to arrive. It returns existing unread events immediately unless `sinceScreenVersion` is provided, in which case only newer events are returned.
+
+### `read_current_wireframe_summary({ sessionId })`
+
+Reads the latest saved wireframe summary for a session and returns `screenVersion`, `filename`, `wireframeSummaryPath`, `wireframeSummary`, and relevant events for that screen. If no summary has been saved, it returns an empty event list and no summary fields.
 
 ### `request_user_input({ modePreference?, message, requestedSchema?, sensitive?, url?, sessionId? })`
 
@@ -284,7 +313,7 @@ Stops the local HTTP/WebSocket server for the session.
 Browser clicks are written as JSONL:
 
 ```json
-{"type":"click","choice":"b","text":"Option B","timestamp":1777429599000,"dwellMs":1200}
+{"type":"click","choice":"b","text":"Option B","timestamp":1777429599000,"dwellMs":1200,"screenVersion":2}
 ```
 
 ## Fragment Example

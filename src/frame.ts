@@ -1,6 +1,7 @@
 export interface RenderScreenOptions {
   sessionId: string;
   content: string;
+  screenVersion?: number;
 }
 
 export function isFullHtmlDocument(content: string): boolean {
@@ -9,7 +10,8 @@ export function isFullHtmlDocument(content: string): boolean {
 }
 
 export function renderScreenHtml(options: RenderScreenOptions): string {
-  const helper = helperScript(options.sessionId);
+  const screenVersion = options.screenVersion ?? 0;
+  const helper = helperScript(options.sessionId, screenVersion);
 
   if (isFullHtmlDocument(options.content)) {
     return injectHelper(options.content, helper);
@@ -25,7 +27,7 @@ export function renderScreenHtml(options: RenderScreenOptions): string {
 ${frameCss()}
   </style>
 </head>
-<body data-session-id="${escapeHtmlAttribute(options.sessionId)}">
+<body data-session-id="${escapeHtmlAttribute(options.sessionId)}" data-screen-version="${screenVersion}">
   <main class="vc-frame">
     ${options.content}
   </main>
@@ -45,11 +47,13 @@ function injectHelper(content: string, helper: string): string {
   return `${content}\n${script}`;
 }
 
-function helperScript(sessionId: string): string {
+function helperScript(sessionId: string, initialScreenVersion: number): string {
   return `
 (() => {
   const sessionId = ${JSON.stringify(sessionId)};
   const startedAt = Date.now();
+  let screenVersion = Number(document.body.dataset.screenVersion || ${JSON.stringify(initialScreenVersion)});
+  document.body.dataset.screenVersion = String(screenVersion);
   let socket;
   let selected = new Set();
   let handledElement = null;
@@ -70,6 +74,10 @@ function helperScript(sessionId: string): string {
 
   function handleServerMessage(message) {
     if (!message || typeof message.type !== "string") return;
+    if (typeof message.screenVersion === "number") {
+      screenVersion = message.screenVersion;
+      document.body.dataset.screenVersion = String(screenVersion);
+    }
     if (message.type === "reload") {
       location.reload();
       return;
@@ -94,7 +102,12 @@ function helperScript(sessionId: string): string {
     }
     if (message.type === "patch-html" && typeof message.selector === "string" && typeof message.html === "string") {
       const target = document.querySelector(message.selector);
-      if (target) target.innerHTML = message.html;
+      if (target) {
+        target.innerHTML = message.html;
+        selected = new Set();
+        handledElement = null;
+        updateIndicator();
+      }
     }
   }
 
@@ -117,6 +130,7 @@ function helperScript(sessionId: string): string {
       ...payload,
       timestamp: Date.now(),
       dwellMs: Date.now() - startedAt,
+      screenVersion,
     };
     if (socket && socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify(eventPayload));
@@ -192,7 +206,7 @@ p { line-height: 1.55; }
   display: grid; grid-template-columns: 42px 1fr; gap: 14px; align-items: start;
   padding: 16px; border: 1px solid #d7dce8; border-radius: 8px; background: #fff; cursor: pointer;
 }
-.option:hover, .card:hover { border-color: #6a8dff; box-shadow: 0 8px 24px rgba(27, 39, 74, .08); }
+.option:hover, .card:hover, .choice-card:hover { border-color: #6a8dff; box-shadow: 0 8px 24px rgba(27, 39, 74, .08); }
 .selected { border-color: #315cff !important; box-shadow: 0 0 0 3px rgba(49, 92, 255, .14) !important; }
 .letter {
   display: grid; place-items: center; width: 34px; height: 34px; border-radius: 999px;
@@ -203,6 +217,17 @@ p { line-height: 1.55; }
 .card { overflow: hidden; border: 1px solid #d7dce8; border-radius: 8px; background: #fff; cursor: pointer; }
 .card-image { min-height: 150px; background: #eef1f7; }
 .card-body { padding: 16px; }
+.choice-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+.choice-card { overflow: hidden; border: 1px solid #d7dce8; border-radius: 8px; background: #fff; cursor: pointer; }
+.choice-thumb { min-height: 130px; background: #eef1f7; }
+.choice-thumb > * { width: 100%; min-height: 130px; }
+.choice-body { padding: 14px; }
+.choice-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.choice-title-row h3 { margin-bottom: 0; }
+.choice-badge {
+  flex: 0 0 auto; border: 1px solid #cfd5e4; border-radius: 999px; padding: 3px 8px;
+  color: #475467; background: #fbfcff; font-size: 12px; font-weight: 700;
+}
 .mockup { overflow: hidden; border: 1px solid #d7dce8; border-radius: 8px; background: #fff; }
 .mockup-header { padding: 10px 14px; border-bottom: 1px solid #e6e9f1; background: #fbfcff; color: #667085; font-size: 13px; font-weight: 700; }
 .mockup-body { padding: 16px; }
