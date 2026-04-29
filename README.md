@@ -223,14 +223,42 @@ When the user asks to show a UI draft, prototype, screen mockup, visual option,
 A/B choice, layout review, or clickable preview, use the `visual-companion`
 MCP server immediately.
 
+Default to current-code-first visual review. In product UI work, the normal goal
+is to show the current page or component as it exists in the codebase, then make
+targeted visual changes with the user. If the requested page or component does
+not exist yet, inspect nearby routes, shared components, design tokens, and data
+patterns, then create a new draft that fits the existing product instead of
+starting from a generic blank concept.
+
+For hidden, blocking, or sequential UI states, separate real behavior from review
+coverage. Show the real current state first. When the goal is visual review,
+also expose relevant modals, sheets, popovers, dropdowns, toasts, validation
+states, empty/loading states, and wizard/form steps as stacked or side-by-side
+review states so the user can judge them at once. Preserve one-step-at-a-time
+interaction only when the user is reviewing the actual interaction flow.
+
 Use this flow:
-1. Call `start_session`.
-2. For fast choices, prefer `show_choice_grid`, `show_options`, `show_cards`,
+1. Inspect the target route, component tree, styles, fixtures, and project
+   frontend guidance. When the target exists, run or inspect the existing app so
+   the first visual draft matches the real current screen. When it does not
+   exist, inspect the closest comparable screens and clearly state that the draft
+   is new but based on those existing patterns.
+2. Call `start_session`.
+3. Render the current screen baseline first when one exists, or make the first
+   draft a small variant of that baseline. Preserve real layout, copy, spacing,
+   navigation, data shape, and interaction states unless the user asked to change
+   them. For a new page, preserve the surrounding product structure and reuse
+   established components and states.
+4. If the screen includes overlays or multi-step flows, include a review view
+   that expands the important states after the baseline unless the user only
+   asked for exact runtime behavior.
+5. For fast choices, prefer `show_choice_grid`, `show_options`, `show_cards`,
    or `show_comparison`; use `show_screen` for custom HTML.
-3. Give the returned URL to the user.
-4. If feedback is needed, use `wait_for_selection` with the returned
+6. Give the returned URL to the user and state what source page/component it is
+   based on.
+7. If feedback is needed, use `wait_for_selection` with the returned
    `screenVersion` as `sinceScreenVersion`, or use `read_events`.
-5. For wireframe handoff, call `read_current_wireframe_summary` after a
+8. For wireframe handoff, call `read_current_wireframe_summary` after a
    `show_wireframe` or `show_choice_grid` call that saved `wireframeSummary`.
 
 Do not search MCP resources first for visual-companion. It is primarily a

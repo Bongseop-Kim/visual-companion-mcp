@@ -583,7 +583,7 @@ function registerDiscoveryHelpers(server: McpServer): void {
     {
       title: "Visual Companion usage guide",
       description:
-        "How to use visual-companion for UI drafts, visual reviews, clickable previews, and A/B choices.",
+        "How to use visual-companion for current-code-first UI drafts, visual reviews, clickable previews, and A/B choices.",
       mimeType: "text/markdown",
     },
     (uri) => ({
@@ -602,7 +602,7 @@ function registerDiscoveryHelpers(server: McpServer): void {
     {
       title: "Show visual draft",
       description:
-        "Use visual-companion immediately when the user asks to show a UI draft, screen mockup, prototype, visual option, or clickable preview.",
+        "Use visual-companion immediately when the user asks to show a current page, UI draft, screen mockup, prototype, visual option, or clickable preview.",
     },
     () => ({
       description: "Visual Companion workflow for UI drafts and visual review.",
@@ -701,17 +701,28 @@ Use this MCP server when the user asks to show a UI draft, screen mockup, protot
 
 Do not stop at listing MCP resources. This server is primarily tool-oriented.
 
+Default to current-code-first visual review. In product UI work, the normal goal is to show the current page or component as it exists in the codebase, then make targeted visual changes with the user. If the requested page or component does not exist yet, inspect nearby routes, shared components, design tokens, and data patterns, then create a new draft that fits the existing product instead of starting from a generic blank concept.
+
 Before making frontend or screen drafts, check the target project's own \`AGENTS.md\` and follow any project-local frontend or screen guidance first.
+
+Inspect the target route, component tree, styles, fixtures, and existing UI states before rendering. When the target exists, run or inspect the existing app so the first visual draft matches the real current screen. When it does not exist, inspect the closest comparable screens and clearly state that the draft is new but based on those existing patterns.
+
+Render the current screen baseline first when one exists, or make the first draft a small variant of that baseline. Preserve real layout, copy, spacing, navigation, data shape, and interaction states unless the user asked to change them. For a new page, preserve the surrounding product structure and reuse established components and states. When sharing the URL, state what source page/component the draft is based on.
+
+For hidden, blocking, or sequential UI states, separate real behavior from review coverage. Show the real current state first. When the goal is visual review, also expose relevant modals, sheets, popovers, dropdowns, toasts, validation states, empty/loading states, and wizard/form steps as stacked or side-by-side review states so the user can judge them at once. Preserve one-step-at-a-time interaction only when the user is reviewing the actual interaction flow.
 
 When showing many draft variants in the browser, prefer vertical stacking or responsive wrapping by default so the review page scrolls vertically. Use horizontal scrolling only when the draft itself is intentionally demonstrating a horizontal-scroll interaction.
 
 Preferred workflow:
 
-1. Call \`start_session\` to create a local browser session.
-2. For quick choices, prefer \`show_choice_grid\`, \`show_options\`, \`show_cards\`, or \`show_comparison\`; use \`show_screen\` for custom HTML.
-3. Give the returned \`url\` to the user.
-4. If the UI asks the user to choose, call \`wait_for_selection({ sinceScreenVersion })\` with the latest returned \`screenVersion\` or use \`read_events\`.
-5. Call \`stop_session\` when the review is done.
+1. Inspect the current code and existing screen behavior for the requested page or component, or the closest comparable screens when the target does not exist yet.
+2. Call \`start_session\` to create a local browser session.
+3. Render the current screen baseline first when one exists, or a new draft based on nearby product patterns when it does not.
+4. If the screen includes overlays or multi-step flows, include a review view that expands the important states after the baseline unless the user only asked for exact runtime behavior.
+5. For quick choices, prefer \`show_choice_grid\`, \`show_options\`, \`show_cards\`, or \`show_comparison\`; use \`show_screen\` for custom HTML.
+6. Give the returned \`url\` to the user and name the source page/component or comparable patterns used.
+7. If the UI asks the user to choose, call \`wait_for_selection({ sinceScreenVersion })\` with the latest returned \`screenVersion\` or use \`read_events\`.
+8. Call \`stop_session\` when the review is done.
 
 Tool names:
 
@@ -731,32 +742,39 @@ Tool names:
 
 const COMPARE_TWO_LAYOUTS_PROMPT = `# Compare two layouts with visual-companion
 
-1. Start a session if one is not already available.
-2. Use \`show_comparison\` for two layout candidates with clear titles, summaries, pros, and cons.
-3. Share the returned browser URL with the user.
-4. Use \`wait_for_selection({ sinceScreenVersion })\` with the returned screen version to capture the selected layout, then \`read_current_wireframe_summary\` when a wireframe summary was saved.
-5. Summarize the selected direction and any tradeoffs.`;
+1. Inspect the existing route/component/styles first and base both candidates on the current screen when it exists; for a new page, base them on the closest comparable product patterns.
+2. Start a session if one is not already available.
+3. Use \`show_comparison\` for two layout candidates with clear titles, summaries, pros, and cons.
+4. Share the returned browser URL with the user and state the source page/component used.
+5. Use \`wait_for_selection({ sinceScreenVersion })\` with the returned screen version to capture the selected layout, then \`read_current_wireframe_summary\` when a wireframe summary was saved.
+6. Summarize the selected direction and any tradeoffs.`;
 
 const COLLECT_DESIGN_FEEDBACK_PROMPT = `# Collect design feedback with visual-companion
 
-1. Start a session if needed and show the draft with \`show_choice_grid\`, \`show_cards\`, \`show_comparison\`, or \`show_wireframe\`.
-2. For non-sensitive structured feedback, prefer \`request_user_input\` with \`modePreference: "auto"\`.
-3. If MCP Elicitation is unavailable, provide a \`sessionId\` so browser fallback can render the form.
-4. Never request secrets, tokens, passwords, or payment credentials with form mode. Use URL mode for sensitive flows.`;
+1. Inspect the existing page/component first and show a baseline or targeted variant that matches the current code; for a new page, inspect comparable screens and show a draft that fits those patterns.
+2. Include expanded review states for relevant modals, sheets, validation states, and wizard/form steps unless the user only asked to test the actual interaction flow.
+3. Start a session if needed and show the draft with \`show_choice_grid\`, \`show_cards\`, \`show_comparison\`, or \`show_wireframe\`.
+4. For non-sensitive structured feedback, prefer \`request_user_input\` with \`modePreference: "auto"\`.
+5. If MCP Elicitation is unavailable, provide a \`sessionId\` so browser fallback can render the form.
+6. Never request secrets, tokens, passwords, or payment credentials with form mode. Use URL mode for sensitive flows.`;
 
 const REVIEW_MOBILE_DESKTOP_PROMPT = `# Review mobile and desktop with visual-companion
 
-1. Start a session if needed.
-2. Use \`show_wireframe\` with \`variant: "split"\`, \`show_choice_grid\`, or \`show_comparison\` to present desktop and mobile versions.
-3. Ask the user to choose or flag issues in the browser.
-4. Use \`wait_for_selection({ sinceScreenVersion })\` or \`read_events\` to collect the review result, then \`read_current_wireframe_summary\` when a wireframe summary was saved.`;
+1. Inspect the existing responsive implementation first, including the route/component, styles, and breakpoints.
+2. Start a session if needed.
+3. Use \`show_wireframe\` with \`variant: "split"\`, \`show_choice_grid\`, or \`show_comparison\` to present desktop and mobile versions based on the current screen.
+4. Include expanded overlay or step states for both breakpoints when those states affect the visual review.
+5. Ask the user to choose or flag issues in the browser.
+6. Use \`wait_for_selection({ sinceScreenVersion })\` or \`read_events\` to collect the review result, then \`read_current_wireframe_summary\` when a wireframe summary was saved.`;
 
 const CHOOSE_VISUAL_DIRECTION_PROMPT = `# Choose a visual direction with visual-companion
 
-1. Start a session if needed.
-2. Use \`show_choice_grid\`, \`show_cards\`, \`show_comparison\`, or \`show_options\` to present direction candidates.
-3. Enable multiselect only when the user can combine directions.
-4. Use \`wait_for_selection({ sinceScreenVersion })\` to capture the choice, then call \`read_current_wireframe_summary\` when a wireframe summary was saved.`;
+1. Inspect the current page/component first and make the existing screen the reference point; for a new page, use nearby product patterns as the reference point.
+2. Start a session if needed.
+3. Use \`show_choice_grid\`, \`show_cards\`, \`show_comparison\`, or \`show_options\` to present direction candidates.
+4. Keep candidates grounded in the current code or nearby product patterns unless the user explicitly asked for unrelated new concepts.
+5. Enable multiselect only when the user can combine directions.
+6. Use \`wait_for_selection({ sinceScreenVersion })\` to capture the choice, then call \`read_current_wireframe_summary\` when a wireframe summary was saved.`;
 
 function toToolResult<T extends z.ZodRawShape>(structuredContent: z.infer<z.ZodObject<T>>) {
   return {
