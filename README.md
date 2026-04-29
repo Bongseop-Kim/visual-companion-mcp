@@ -34,7 +34,15 @@ bun run probe:mcp
 codex mcp list
 ```
 
-Restart Codex after installation so the current session reloads MCP tools.
+To register with Claude Code:
+
+```sh
+bun run install:claude
+bun run probe:mcp
+claude mcp list
+```
+
+Restart Codex or Claude Code after installation so the current session reloads MCP tools.
 
 ## Run
 
@@ -66,14 +74,26 @@ The second command starts the MCP stdio server. Stop it with `Ctrl-C` after conf
 
 ### Claude Code
 
-Register the binary as a local stdio MCP server:
+Recommended user-scoped install:
 
 ```sh
-claude mcp add visual-companion --scope user -- ./visual-companion-mcp
+bun run install:claude
 claude mcp list
 ```
 
-For a project-shared registration, use `--scope project` instead. Claude Code writes project-scoped servers to `.mcp.json`.
+For a project-shared registration:
+
+```sh
+bun run install:claude -- --project
+```
+
+The script runs Claude Code's MCP CLI with the compiled binary's absolute path:
+
+```sh
+claude mcp add visual-companion --scope user -- /absolute/path/to/visual-companion-mcp
+```
+
+Use `--scope project` for a project-shared registration. Claude Code writes project-scoped servers to `.mcp.json`.
 
 Equivalent `.mcp.json`:
 
@@ -82,13 +102,15 @@ Equivalent `.mcp.json`:
   "mcpServers": {
     "visual-companion": {
       "type": "stdio",
-      "command": "./visual-companion-mcp",
+      "command": "/absolute/path/to/visual-companion-mcp",
       "args": [],
       "env": {}
     }
   }
 }
 ```
+
+After adding or changing an MCP server, restart Claude Code so the available tool list is refreshed.
 
 ### Codex
 
