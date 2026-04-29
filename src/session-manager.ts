@@ -38,10 +38,22 @@ interface Session {
   currentWireframeSummaryPath: string | null;
   recentEvents: CompanionEvent[];
   waiters: Set<(event: CompanionEvent) => void>;
+  idleTimer: ReturnType<typeof setTimeout> | null;
 }
+
+export interface SessionManagerOptions {
+  idleTimeoutMs?: number | null;
+}
+
+const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 
 export class SessionManager {
   private readonly sessions = new Map<string, Session>();
+  private readonly idleTimeoutMs: number | null;
+
+  constructor(options: SessionManagerOptions = {}) {
+    this.idleTimeoutMs = options.idleTimeoutMs === undefined ? DEFAULT_IDLE_TIMEOUT_MS : options.idleTimeoutMs;
+  }
 
   async startSession(input: StartSessionInput = {}): Promise<StartSessionOutput> {
     const options = startSessionInputSchema.parse(input);
@@ -62,6 +74,7 @@ export class SessionManager {
     let session!: Session;
 
     const requestedPort = options.port ?? (await getAvailablePort(options.host));
+    const manager = this;
     const server = Bun.serve({
       hostname: options.host,
       port: requestedPort,
@@ -75,9 +88,11 @@ export class SessionManager {
         }
 
         if (url.pathname === "/healthz") {
+          this.markActivity(session);
           return Response.json({ ok: true, sessionId });
         }
 
+        this.markActivity(session);
         return new Response(session.currentHtml, {
           headers: { "content-type": "text/html; charset=utf-8" },
         });
@@ -85,11 +100,16 @@ export class SessionManager {
       websocket: {
         open(ws) {
           clients.add(ws);
+          session.idleTimer = clearIdleTimer(session.idleTimer);
         },
         close(ws) {
           clients.delete(ws);
+          if (clients.size === 0) {
+            manager.scheduleIdleStop(session);
+          }
         },
         async message(_ws, message) {
+          manager.markActivity(session);
           const event = parseClientEvent(message);
           if (!event) return;
           const versionedEvent =
@@ -125,8 +145,10 @@ export class SessionManager {
       currentWireframeSummaryPath: null,
       recentEvents: [],
       waiters,
+      idleTimer: null,
     };
     this.sessions.set(sessionId, session);
+    this.scheduleIdleStop(session);
 
     await writeFile(
       join(workDir, "session.json"),
@@ -157,6 +179,7 @@ export class SessionManager {
 
   async showScreen(input: ShowScreenWithSummaryInput): Promise<ShowScreenOutput> {
     const session = this.getSession(input.sessionId);
+    this.markActivity(session);
     const options = {
       delivery: input.delivery ?? "auto",
       patchSelector: input.patchSelector ?? ".vc-frame",
@@ -194,6 +217,7 @@ export class SessionManager {
 
   async readEvents(input: { sessionId: string; clear?: boolean }): Promise<CompanionEvent[]> {
     const session = this.getSession(input.sessionId);
+    this.markActivity(session);
     const events = await readEvents(session.eventsPath, { clear: input.clear ?? false });
     if (input.clear) {
       session.recentEvents = [];
@@ -208,6 +232,7 @@ export class SessionManager {
       sinceScreenVersion: input.sinceScreenVersion,
     };
     const session = this.getSession(parsed.sessionId);
+    this.markActivity(session);
     const existing = filterEvents(session.recentEvents, parsed.sinceScreenVersion);
     if (existing.length > 0) {
       return { events: existing, timedOut: false };
@@ -235,6 +260,7 @@ export class SessionManager {
 
   async readCurrentWireframeSummary(sessionId: string): Promise<ReadCurrentWireframeSummaryOutput> {
     const session = this.getSession(sessionId);
+    this.markActivity(session);
     if (!session.currentWireframeSummaryPath) {
       return { sessionId: session.id, events: [] };
     }
@@ -261,6 +287,7 @@ export class SessionManager {
     const session = this.sessions.get(sessionId);
     if (!session) return false;
     this.sessions.delete(sessionId);
+    session.idleTimer = clearIdleTimer(session.idleTimer);
     session.waiters.clear();
     for (const client of session.clients) client.close();
     session.server.stop(true);
@@ -277,6 +304,23 @@ export class SessionManager {
       throw new Error(`Unknown session: ${sessionId}`);
     }
     return session;
+  }
+
+  private markActivity(session: Session): void {
+    if (session.clients.size > 0) {
+      session.idleTimer = clearIdleTimer(session.idleTimer);
+      return;
+    }
+    this.scheduleIdleStop(session);
+  }
+
+  private scheduleIdleStop(session: Session): void {
+    session.idleTimer = clearIdleTimer(session.idleTimer);
+    if (this.idleTimeoutMs === null) return;
+    session.idleTimer = setTimeout(() => {
+      void this.stopSession(session.id);
+    }, this.idleTimeoutMs);
+    session.idleTimer.unref?.();
   }
 
   private async writeWireframeSummary(
@@ -389,6 +433,11 @@ function wireframeSummaryFilename(filename: string): string {
 function createSessionId(): string {
   const random = crypto.randomUUID().slice(0, 8);
   return `${Date.now().toString(36)}-${random}`;
+}
+
+function clearIdleTimer(timer: ReturnType<typeof setTimeout> | null): null {
+  if (timer) clearTimeout(timer);
+  return null;
 }
 
 async function resolveSessionBaseDir(baseDir: string | undefined): Promise<string> {

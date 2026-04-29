@@ -96,6 +96,18 @@ describe("SessionManager wireframe summaries", () => {
 
     expect(current.events.map((event) => event.choice)).toEqual(["current"]);
   });
+
+  test("stops idle sessions automatically", async () => {
+    const manager = new SessionManager({ idleTimeoutMs: 20 });
+    managers.push(manager);
+    const baseDir = await mkdtemp(join(tmpdir(), "visual-companion-test-"));
+    const session = await manager.startSession({ baseDir });
+
+    await sleep(80);
+
+    expect(await manager.stopSession(session.sessionId)).toBe(false);
+    await expect(fetch(`${session.url}/healthz`)).rejects.toThrow();
+  });
 });
 
 async function startTestSession(): Promise<{ manager: SessionManager; session: StartSessionOutput }> {
@@ -122,4 +134,8 @@ function wireframeSummary(): WireframeSummary {
     notes: ["Keep the structure low fidelity."],
     constraints: ["Do not encode visual design tokens."],
   };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

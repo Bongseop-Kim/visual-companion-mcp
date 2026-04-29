@@ -673,8 +673,25 @@ function registerWorkflowPrompt(
 }
 
 export async function runStdioServer(): Promise<void> {
-  const server = createMcpServer();
+  const manager = new SessionManager();
+  const server = createMcpServer(manager);
   const transport = new StdioServerTransport();
+  let shuttingDown = false;
+
+  const shutdown = async (exitCode?: number) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    await manager.stopAll();
+    if (exitCode !== undefined) {
+      process.exit(exitCode);
+    }
+  };
+
+  process.stdin.once("end", () => void shutdown(0));
+  process.stdin.once("close", () => void shutdown(0));
+  process.once("SIGINT", () => void shutdown(130));
+  process.once("SIGTERM", () => void shutdown(143));
+
   await server.connect(transport);
 }
 
