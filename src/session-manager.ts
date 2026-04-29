@@ -39,20 +39,25 @@ interface Session {
   recentEvents: CompanionEvent[];
   waiters: Set<(event: CompanionEvent) => void>;
   idleTimer: ReturnType<typeof setTimeout> | null;
+  maxLifetimeTimer: ReturnType<typeof setTimeout> | null;
 }
 
 export interface SessionManagerOptions {
   idleTimeoutMs?: number | null;
+  maxLifetimeMs?: number | null;
 }
 
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+const DEFAULT_MAX_LIFETIME_MS = 2 * 60 * 60 * 1000;
 
 export class SessionManager {
   private readonly sessions = new Map<string, Session>();
   private readonly idleTimeoutMs: number | null;
+  private readonly maxLifetimeMs: number | null;
 
   constructor(options: SessionManagerOptions = {}) {
     this.idleTimeoutMs = options.idleTimeoutMs === undefined ? DEFAULT_IDLE_TIMEOUT_MS : options.idleTimeoutMs;
+    this.maxLifetimeMs = options.maxLifetimeMs === undefined ? DEFAULT_MAX_LIFETIME_MS : options.maxLifetimeMs;
   }
 
   async startSession(input: StartSessionInput = {}): Promise<StartSessionOutput> {
@@ -146,9 +151,11 @@ export class SessionManager {
       recentEvents: [],
       waiters,
       idleTimer: null,
+      maxLifetimeTimer: null,
     };
     this.sessions.set(sessionId, session);
     this.scheduleIdleStop(session);
+    this.scheduleMaxLifetimeStop(session);
 
     await writeFile(
       join(workDir, "session.json"),
@@ -288,6 +295,7 @@ export class SessionManager {
     if (!session) return false;
     this.sessions.delete(sessionId);
     session.idleTimer = clearIdleTimer(session.idleTimer);
+    session.maxLifetimeTimer = clearIdleTimer(session.maxLifetimeTimer);
     session.waiters.clear();
     for (const client of session.clients) client.close();
     session.server.stop(true);
@@ -321,6 +329,15 @@ export class SessionManager {
       void this.stopSession(session.id);
     }, this.idleTimeoutMs);
     session.idleTimer.unref?.();
+  }
+
+  private scheduleMaxLifetimeStop(session: Session): void {
+    session.maxLifetimeTimer = clearIdleTimer(session.maxLifetimeTimer);
+    if (this.maxLifetimeMs === null) return;
+    session.maxLifetimeTimer = setTimeout(() => {
+      void this.stopSession(session.id);
+    }, this.maxLifetimeMs);
+    session.maxLifetimeTimer.unref?.();
   }
 
   private async writeWireframeSummary(

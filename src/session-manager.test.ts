@@ -108,6 +108,21 @@ describe("SessionManager wireframe summaries", () => {
     expect(await manager.stopSession(session.sessionId)).toBe(false);
     await expect(fetch(`${session.url}/healthz`)).rejects.toThrow();
   });
+
+  test("stops sessions after max lifetime even with an open browser client", async () => {
+    const manager = new SessionManager({ idleTimeoutMs: 1_000, maxLifetimeMs: 20 });
+    managers.push(manager);
+    const baseDir = await mkdtemp(join(tmpdir(), "visual-companion-test-"));
+    const session = await manager.startSession({ baseDir });
+    const socket = new WebSocket(`${session.url.replace("http://", "ws://")}/ws`);
+
+    await waitForSocketOpen(socket);
+    await sleep(80);
+
+    expect(await manager.stopSession(session.sessionId)).toBe(false);
+    await expect(fetch(`${session.url}/healthz`)).rejects.toThrow();
+    socket.close();
+  });
 });
 
 async function startTestSession(): Promise<{ manager: SessionManager; session: StartSessionOutput }> {
@@ -138,4 +153,11 @@ function wireframeSummary(): WireframeSummary {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function waitForSocketOpen(socket: WebSocket): Promise<void> {
+  return new Promise((resolve, reject) => {
+    socket.addEventListener("open", () => resolve(), { once: true });
+    socket.addEventListener("error", () => reject(new Error("WebSocket failed to open")), { once: true });
+  });
 }
