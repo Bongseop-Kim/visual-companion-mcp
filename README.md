@@ -42,6 +42,61 @@ bun run compile
 
 `bun run compile` produces a single executable at `./visual-companion-mcp`.
 
+## Register With MCP Clients
+
+Use the compiled binary for client registration so the MCP server does not require Bun at runtime:
+
+```sh
+bun run compile
+./visual-companion-mcp
+```
+
+The second command starts the MCP stdio server. Stop it with `Ctrl-C` after confirming it launches.
+
+### Claude Code
+
+Register the binary as a local stdio MCP server:
+
+```sh
+claude mcp add visual-companion --scope user -- ./visual-companion-mcp
+claude mcp list
+```
+
+For a project-shared registration, use `--scope project` instead. Claude Code writes project-scoped servers to `.mcp.json`.
+
+Equivalent `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "visual-companion": {
+      "type": "stdio",
+      "command": "./visual-companion-mcp",
+      "args": [],
+      "env": {}
+    }
+  }
+}
+```
+
+### Codex
+
+Register the binary with the Codex CLI:
+
+```sh
+codex mcp add visual-companion -- ./visual-companion-mcp
+codex mcp list
+```
+
+Equivalent `~/.codex/config.toml` or project-scoped `.codex/config.toml`:
+
+```toml
+[mcp_servers.visual-companion]
+command = "./visual-companion-mcp"
+```
+
+If the binary is not in the client working directory, use an absolute path for `command`.
+
 ## Tool Overview
 
 ### `start_session(opts?)`
