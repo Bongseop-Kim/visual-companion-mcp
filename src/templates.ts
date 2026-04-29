@@ -114,6 +114,8 @@ export function renderInputRequestTemplate(input: RequestUserInput): string {
       if (!element.name) continue;
       if (element.type === "checkbox") {
         content[element.name] = Boolean(element.checked);
+      } else if (element.tagName === "SELECT" && element.multiple) {
+        content[element.name] = Array.from(element.selectedOptions).map((option) => option.value);
       } else if (element.type === "number") {
         content[element.name] = Number(element.value);
       } else {
@@ -202,6 +204,20 @@ function renderField(name: string, field: FormField, required: boolean): string 
       ${field.enum.map((value) => `<option value="${escapeHtmlAttribute(value)}"${value === field.default ? " selected" : ""}>${escapeHtml(value)}</option>`).join("")}
     </select></label>${description}`;
   }
+  if (field.oneOf && field.oneOf.length > 0) {
+    return `<label class="section"><span class="label">${label}</span><select class="mock-input" name="${escapeHtmlAttribute(name)}"${requiredAttribute}>
+      ${field.oneOf.map((option) => `<option value="${escapeHtmlAttribute(option.const)}"${option.const === field.default ? " selected" : ""}>${escapeHtml(option.title)}</option>`).join("")}
+    </select></label>${description}`;
+  }
+  if (field.type === "array" && field.items) {
+    const options = "enum" in field.items
+      ? field.items.enum.map((value) => ({ const: value, title: value }))
+      : field.items.anyOf;
+    const defaults = Array.isArray(field.default) ? field.default : [];
+    return `<label class="section"><span class="label">${label}</span><select class="mock-input" name="${escapeHtmlAttribute(name)}" multiple${requiredAttribute}>
+      ${options.map((option) => `<option value="${escapeHtmlAttribute(option.const)}"${defaults.includes(option.const) ? " selected" : ""}>${escapeHtml(option.title)}</option>`).join("")}
+    </select></label>${description}`;
+  }
   const type = field.type === "number" || field.type === "integer" ? "number" : "text";
   return `<label class="section"><span class="label">${label}</span><input class="mock-input" name="${escapeHtmlAttribute(name)}" type="${type}" value="${escapeHtmlAttribute(String(field.default ?? ""))}"${requiredAttribute}></label>${description}`;
 }
@@ -216,7 +232,9 @@ interface FormField {
   title?: string;
   description?: string;
   enum?: string[];
-  default?: string | number | boolean;
+  oneOf?: Array<{ const: string; title: string }>;
+  items?: { type: "string"; enum: string[] } | { anyOf: Array<{ const: string; title: string }> };
+  default?: string | number | boolean | string[];
 }
 
 function normalizeFormSchema(schema: RequestUserInput["requestedSchema"]): FormSchema {
