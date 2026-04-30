@@ -2,6 +2,8 @@ import { escapeHtml, escapeHtmlAttribute } from "./frame";
 import {
   DEFAULT_REQUESTED_SCHEMA,
   type RequestUserInput,
+  type ReviewBoard,
+  type ReviewItem,
   type ShowCardsInput,
   type ShowChoiceGridInput,
   type ShowComparisonInput,
@@ -92,6 +94,36 @@ export function renderWireframeTemplate(input: ShowWireframeInput): string {
 </div>`;
 }
 
+export function renderReviewBoardTemplate(board: ReviewBoard): string {
+  const visibleItems = board.items.filter((item) => !item.archived);
+  const references = visibleItems.filter((item) => item.role === "reference");
+  const drafts = visibleItems.filter((item) => item.role === "draft");
+  const proposals = visibleItems.filter((item) => item.role === "proposal");
+
+  return `<style>
+.review-board { display: grid; gap: 22px; }
+.review-board-section { display: grid; gap: 12px; }
+.review-board-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; border-bottom: 1px solid #e6e9f1; padding-bottom: 8px; }
+.review-board-heading h3 { margin: 0; font-size: 15px; color: #344054; }
+.review-board-count { color: #667085; font-size: 12px; font-weight: 700; }
+.review-board-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+.review-item { border: 1px solid #d7dce8; border-radius: 8px; background: #fff; overflow: hidden; }
+.review-item-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border-bottom: 1px solid #eef1f6; background: #fbfcff; }
+.review-item-title { font-weight: 800; color: #182230; }
+.review-item-meta { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+.review-badge { border: 1px solid #d0d5dd; border-radius: 999px; padding: 2px 7px; color: #475467; font-size: 11px; font-weight: 700; background: #fff; }
+.review-badge.locked { border-color: #fedf89; color: #93370d; background: #fffbeb; }
+.review-item-body { padding: 12px; }
+.review-change-summary { margin: 0; padding: 8px 12px 10px; border-top: 1px solid #eef1f6; color: #667085; font-size: 13px; }
+</style>
+${renderHeading(board.title ?? "Review Board", `Board ${board.boardId}`)}
+<div class="review-board" data-review-board-id="${escapeHtmlAttribute(board.boardId)}">
+  ${renderReviewSection("Reference", references)}
+  ${renderReviewSection("Draft", drafts)}
+  ${renderReviewSection("Proposal", proposals)}
+</div>`;
+}
+
 export function renderInputRequestTemplate(input: RequestUserInput): string {
   const schema = normalizeFormSchema(input.requestedSchema);
   const fields = Object.entries(schema.properties);
@@ -135,6 +167,38 @@ export function renderInputRequestTemplate(input: RequestUserInput): string {
 
 function renderHeading(title: string, subtitle?: string): string {
   return `<h2>${escapeHtml(title)}</h2>${subtitle ? `<p class="subtitle">${escapeHtml(subtitle)}</p>` : ""}`;
+}
+
+function renderReviewSection(title: string, items: ReviewItem[]): string {
+  return `<section class="review-board-section" data-review-section="${escapeHtmlAttribute(title.toLowerCase())}">
+    <div class="review-board-heading">
+      <h3>${escapeHtml(title)}</h3>
+      <span class="review-board-count">${items.length}</span>
+    </div>
+    <div class="review-board-grid">
+      ${items.length > 0 ? items.map(renderReviewItem).join("\n") : `<div class="placeholder">No ${escapeHtml(title.toLowerCase())} items.</div>`}
+    </div>
+  </section>`;
+}
+
+function renderReviewItem(item: ReviewItem): string {
+  const badges = [
+    item.referenceType,
+    `v${item.version}`,
+    item.locked ? "locked" : undefined,
+    item.temporary ? "temporary" : undefined,
+  ].filter(Boolean);
+
+  return `<article class="review-item" data-review-item-id="${escapeHtmlAttribute(item.id)}" data-review-role="${escapeHtmlAttribute(item.role)}">
+    <div class="review-item-header">
+      <div class="review-item-title">${escapeHtml(item.title)}</div>
+      <div class="review-item-meta">
+        ${badges.map((badge) => `<span class="review-badge${badge === "locked" ? " locked" : ""}">${escapeHtml(String(badge))}</span>`).join("")}
+      </div>
+    </div>
+    <div class="review-item-body">${item.html}</div>
+    ${item.changeSummary ? `<p class="review-change-summary">${escapeHtml(item.changeSummary)}</p>` : ""}
+  </article>`;
 }
 
 function renderOption(

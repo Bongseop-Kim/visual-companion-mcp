@@ -14,6 +14,12 @@ It is designed for visual collaboration loops such as layout choices, wireframes
   - `show_choice_grid`
   - `show_comparison`
   - `show_wireframe`
+  - `show_review_board`
+  - `update_review_item`
+  - `add_review_items`
+  - `accept_review_item`
+  - `archive_review_item`
+  - `read_review_board`
   - `read_events`
   - `wait_for_selection`
   - `read_current_wireframe_summary`
@@ -25,6 +31,7 @@ It is designed for visual collaboration loops such as layout choices, wireframes
 - Click events are stored as JSONL on disk.
 - Multiple sessions can run in one MCP process on separate local ports.
 - Fast choice templates for common selection loops; use `show_choice_grid`, `show_options`, `show_cards`, or `show_comparison` before falling back to raw `show_screen`.
+- Review Board state for multi-draft reviews; reference items such as current and accepted screens are preserved while individual drafts or proposals are updated.
 - Optional lightweight wireframe summaries can be saved beside wireframe screens and read back as structured MCP output.
 - Built-in CSS classes for common visual patterns: `.options`, `.cards`, `.choice-grid`, `.mockup`, `.split`, `.pros-cons`.
 
@@ -156,6 +163,12 @@ enabled_tools = [
   "show_choice_grid",
   "show_comparison",
   "show_wireframe",
+  "show_review_board",
+  "update_review_item",
+  "add_review_items",
+  "accept_review_item",
+  "archive_review_item",
+  "read_review_board",
   "read_events",
   "wait_for_selection",
   "read_current_wireframe_summary",
@@ -187,6 +200,12 @@ Expected output:
     "show_choice_grid",
     "show_comparison",
     "show_wireframe",
+    "show_review_board",
+    "update_review_item",
+    "add_review_items",
+    "accept_review_item",
+    "archive_review_item",
+    "read_review_board",
     "read_events",
     "wait_for_selection",
     "read_current_wireframe_summary",
@@ -252,8 +271,11 @@ Use this flow:
 4. If the screen includes overlays or multi-step flows, include a review view
    that expands the important states after the baseline unless the user only
    asked for exact runtime behavior.
-5. For fast choices, prefer `show_choice_grid`, `show_options`, `show_cards`,
-   or `show_comparison`; use `show_screen` for custom HTML.
+5. For multi-draft reviews, use `show_review_board`; for later edits use
+   `update_review_item`, `add_review_items`, `accept_review_item`, or
+   `archive_review_item`. For fast one-off choices, prefer `show_choice_grid`,
+   `show_options`, `show_cards`, or `show_comparison`; use `show_screen` for
+   custom HTML.
 6. Give the returned URL to the user and state what source page/component it is
    based on.
 7. If feedback is needed, use `wait_for_selection` with the returned
@@ -270,6 +292,13 @@ When showing many draft variants in the browser, prefer vertical stacking or
 responsive wrapping by default so the review page scrolls vertically. Use
 horizontal scrolling only when the draft itself is intentionally demonstrating a
 horizontal-scroll interaction.
+
+When a review includes multiple drafts, accepted screens, or the current
+implementation as a baseline, use Review Board tools. Put protected current or
+accepted screens in `reference` items, active alternatives in `draft` items, and
+new ideas in `proposal` items. Later requests to change one specific screen
+should call `update_review_item` for that item id instead of replacing the whole
+browser view.
 ```
 
 ## Tool Overview
@@ -327,6 +356,46 @@ Writes and displays a selectable comparison. Each item supports `description`, `
 Writes and displays a selectable wireframe. `variant` can be `desktop`, `mobile`, or `split`.
 
 `wireframeSummary` is a lightweight structure handoff, not a design spec. Keep it to screen purpose, layout pattern, regions, primary action, choices, notes, and constraints.
+
+### Review Board tools
+
+Use Review Board tools for multi-draft visual review where current screens,
+accepted drafts, or pinned references must not disappear during later edits.
+
+Review items have `id`, `role`, `title`, and `html`. Roles are:
+
+- `reference`: preserved baseline item, such as `referenceType: "current"` or `referenceType: "accepted"`.
+- `draft`: active comparison or modification candidate.
+- `proposal`: new candidate that should not replace existing references or drafts.
+
+Accepted references are locked by default.
+
+### `show_review_board({ sessionId, boardId, title?, filename?, currentReferenceId?, items })`
+
+Creates or replaces a board and renders visible items as Reference, Draft, and Proposal sections.
+
+### `update_review_item({ sessionId, boardId, itemId, html, title?, changeSummary?, filename? })`
+
+Updates exactly one board item and re-renders the full board. Other references,
+drafts, and proposals are preserved. Locked references cannot be updated.
+
+### `add_review_items({ sessionId, boardId, items, filename? })`
+
+Adds new items to an existing board without replacing existing items.
+
+### `accept_review_item({ sessionId, boardId, itemId, filename? })`
+
+Promotes an item to `role: "reference"`, `referenceType: "accepted"`, and
+`locked: true`. Existing accepted references remain on the board.
+
+### `archive_review_item({ sessionId, boardId, itemId, filename? })`
+
+Hides a mutable item from the default render without deleting it. Locked
+references cannot be archived.
+
+### `read_review_board({ sessionId, boardId })`
+
+Reads the persisted board state from the session directory.
 
 ### `read_events({ sessionId, clear? })`
 

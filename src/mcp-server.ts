@@ -5,18 +5,24 @@ import { z } from "zod";
 import { SessionManager } from "./session-manager";
 import {
   DEFAULT_REQUESTED_SCHEMA,
+  acceptReviewItemInputSchema,
+  addReviewItemsInputSchema,
+  archiveReviewItemInputSchema,
   readEventsInputSchema,
   readEventsOutputSchema,
   readCurrentWireframeSummaryInputSchema,
   readCurrentWireframeSummaryOutputSchema,
+  readReviewBoardInputSchema,
   requestUserInputOutputSchema,
   requestUserInputSchema,
+  reviewBoardOutputSchema,
   showScreenInputSchema,
   showScreenOutputSchema,
   showCardsInputSchema,
   showChoiceGridInputSchema,
   showComparisonInputSchema,
   showOptionsInputSchema,
+  showReviewBoardInputSchema,
   showWireframeInputSchema,
   startSessionInputSchema,
   startSessionOutputSchema,
@@ -24,6 +30,7 @@ import {
   stopSessionOutputSchema,
   type RequestUserInput,
   type RequestUserInputOutput,
+  updateReviewItemInputSchema,
   waitForSelectionInputSchema,
   waitForSelectionOutputSchema,
 } from "./schemas";
@@ -161,6 +168,77 @@ export function createMcpServer(manager = new SessionManager()): McpServer {
           wireframeSummary: args.wireframeSummary,
         }),
       ),
+  );
+
+  server.registerTool(
+    "show_review_board",
+    {
+      title: "Show review board",
+      description:
+        "Create or replace a Review Board for multi-draft visual review. Reference items are rendered first and are preserved by later item updates.",
+      inputSchema: showReviewBoardInputSchema,
+      outputSchema: reviewBoardOutputSchema,
+    },
+    async (args) => toToolResult(await manager.showReviewBoard(args)),
+  );
+
+  server.registerTool(
+    "update_review_item",
+    {
+      title: "Update review item",
+      description:
+        "Update one Review Board item by id while preserving all other reference, draft, and proposal items. Locked reference items cannot be updated.",
+      inputSchema: updateReviewItemInputSchema,
+      outputSchema: reviewBoardOutputSchema,
+    },
+    async (args) => toToolResult(await manager.updateReviewItem(args)),
+  );
+
+  server.registerTool(
+    "add_review_items",
+    {
+      title: "Add review items",
+      description:
+        "Add draft or proposal items to an existing Review Board without replacing existing references or drafts.",
+      inputSchema: addReviewItemsInputSchema,
+      outputSchema: reviewBoardOutputSchema,
+    },
+    async (args) => toToolResult(await manager.addReviewItems(args)),
+  );
+
+  server.registerTool(
+    "accept_review_item",
+    {
+      title: "Accept review item",
+      description:
+        "Mark a Review Board item as an accepted locked reference while keeping existing accepted references unless explicitly archived later.",
+      inputSchema: acceptReviewItemInputSchema,
+      outputSchema: reviewBoardOutputSchema,
+    },
+    async (args) => toToolResult(await manager.acceptReviewItem(args)),
+  );
+
+  server.registerTool(
+    "archive_review_item",
+    {
+      title: "Archive review item",
+      description:
+        "Hide a mutable Review Board item from the default board render without deleting it. Locked references cannot be archived.",
+      inputSchema: archiveReviewItemInputSchema,
+      outputSchema: reviewBoardOutputSchema,
+    },
+    async (args) => toToolResult(await manager.archiveReviewItem(args)),
+  );
+
+  server.registerTool(
+    "read_review_board",
+    {
+      title: "Read review board",
+      description: "Read the persisted Review Board state for a session and board id.",
+      inputSchema: readReviewBoardInputSchema,
+      outputSchema: reviewBoardOutputSchema,
+    },
+    async (args) => toToolResult(await manager.readReviewBoard(args)),
   );
 
   server.registerTool(
@@ -713,13 +791,15 @@ For hidden, blocking, or sequential UI states, separate real behavior from revie
 
 When showing many draft variants in the browser, prefer vertical stacking or responsive wrapping by default so the review page scrolls vertically. Use horizontal scrolling only when the draft itself is intentionally demonstrating a horizontal-scroll interaction.
 
+When a review contains multiple screen drafts, accepted drafts, or a current implementation reference, use Review Board tools instead of replacing the browser with a one-off screen. Put current and accepted screens in \`reference\` items, active alternatives in \`draft\` items, and new ideas in \`proposal\` items. Later requests to change one specific screen should call \`update_review_item\` for that item id so references and other drafts remain visible.
+
 Preferred workflow:
 
 1. Inspect the current code and existing screen behavior for the requested page or component, or the closest comparable screens when the target does not exist yet.
 2. Call \`start_session\` to create a local browser session.
 3. Render the current screen baseline first when one exists, or a new draft based on nearby product patterns when it does not.
 4. If the screen includes overlays or multi-step flows, include a review view that expands the important states after the baseline unless the user only asked for exact runtime behavior.
-5. For quick choices, prefer \`show_choice_grid\`, \`show_options\`, \`show_cards\`, or \`show_comparison\`; use \`show_screen\` for custom HTML.
+5. For multi-draft reviews, use \`show_review_board\`; for later edits use \`update_review_item\`, \`add_review_items\`, \`accept_review_item\`, or \`archive_review_item\`. For quick one-off choices, prefer \`show_choice_grid\`, \`show_options\`, \`show_cards\`, or \`show_comparison\`; use \`show_screen\` for custom HTML.
 6. Give the returned \`url\` to the user and name the source page/component or comparable patterns used.
 7. If the UI asks the user to choose, call \`wait_for_selection({ sinceScreenVersion })\` with the latest returned \`screenVersion\` or use \`read_events\`.
 8. Call \`stop_session\` when the review is done.
@@ -733,6 +813,12 @@ Tool names:
 - \`show_choice_grid\`
 - \`show_comparison\`
 - \`show_wireframe\`
+- \`show_review_board\`
+- \`update_review_item\`
+- \`add_review_items\`
+- \`accept_review_item\`
+- \`archive_review_item\`
+- \`read_review_board\`
 - \`read_events\`
 - \`wait_for_selection\`
 - \`read_current_wireframe_summary\`

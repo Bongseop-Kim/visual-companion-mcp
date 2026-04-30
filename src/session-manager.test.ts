@@ -125,6 +125,140 @@ describe("SessionManager wireframe summaries", () => {
   });
 });
 
+describe("SessionManager review boards", () => {
+  test("updates one draft while preserving reference and accepted items", async () => {
+    const { manager, session } = await startTestSession();
+    const shown = await manager.showReviewBoard({
+      sessionId: session.sessionId,
+      boardId: "checkout",
+      title: "Checkout review",
+      currentReferenceId: "current",
+      items: [
+        {
+          id: "current",
+          role: "reference",
+          referenceType: "current",
+          locked: true,
+          title: "Current screen",
+          html: "<p>Current page</p>",
+        },
+        {
+          id: "accepted",
+          role: "reference",
+          referenceType: "accepted",
+          title: "Accepted screen",
+          html: "<p>Accepted page</p>",
+        },
+        {
+          id: "draft-a",
+          role: "draft",
+          title: "Draft A",
+          html: "<p>Old draft</p>",
+        },
+      ],
+    });
+
+    expect(shown.acceptedItemIds).toEqual(["accepted"]);
+    expect(shown.items.find((item) => item.id === "accepted")?.locked).toBe(true);
+
+    const updated = await manager.updateReviewItem({
+      sessionId: session.sessionId,
+      boardId: "checkout",
+      itemId: "draft-a",
+      html: "<p>Updated draft</p>",
+      changeSummary: "Updated only Draft A",
+    });
+    const rendered = await readFile(updated.filePath!, "utf8");
+
+    expect(updated.items.map((item) => item.id)).toEqual(["current", "accepted", "draft-a"]);
+    expect(updated.items.find((item) => item.id === "draft-a")?.version).toBe(2);
+    expect(rendered).toContain("Current page");
+    expect(rendered).toContain("Accepted page");
+    expect(rendered).toContain("Updated draft");
+    expect(rendered).not.toContain("Old draft");
+  });
+
+  test("adds proposals without replacing existing board items", async () => {
+    const { manager, session } = await startTestSession();
+    await manager.showReviewBoard({
+      sessionId: session.sessionId,
+      boardId: "product",
+      items: [
+        { id: "accepted", role: "reference", referenceType: "accepted", title: "Accepted", html: "<p>A</p>" },
+        { id: "draft", role: "draft", title: "Draft", html: "<p>D</p>" },
+      ],
+    });
+
+    const updated = await manager.addReviewItems({
+      sessionId: session.sessionId,
+      boardId: "product",
+      items: [{ id: "proposal", role: "proposal", title: "Proposal", html: "<p>P</p>" }],
+    });
+
+    expect(updated.items.map((item) => item.id)).toEqual(["accepted", "draft", "proposal"]);
+    expect(updated.acceptedItemIds).toEqual(["accepted"]);
+  });
+
+  test("accepts a draft as a locked reference while keeping existing accepted items", async () => {
+    const { manager, session } = await startTestSession();
+    await manager.showReviewBoard({
+      sessionId: session.sessionId,
+      boardId: "accept",
+      items: [
+        { id: "accepted", role: "reference", referenceType: "accepted", title: "Accepted", html: "<p>A</p>" },
+        { id: "draft", role: "draft", title: "Draft", html: "<p>D</p>" },
+      ],
+    });
+
+    const updated = await manager.acceptReviewItem({
+      sessionId: session.sessionId,
+      boardId: "accept",
+      itemId: "draft",
+    });
+    const read = await manager.readReviewBoard({ sessionId: session.sessionId, boardId: "accept" });
+    const acceptedDraft = read.items.find((item) => item.id === "draft");
+
+    expect(updated.acceptedItemIds).toEqual(["accepted", "draft"]);
+    expect(acceptedDraft?.role).toBe("reference");
+    expect(acceptedDraft?.referenceType).toBe("accepted");
+    expect(acceptedDraft?.locked).toBe(true);
+  });
+
+  test("blocks updates and archives for locked references", async () => {
+    const { manager, session } = await startTestSession();
+    await manager.showReviewBoard({
+      sessionId: session.sessionId,
+      boardId: "locked",
+      items: [
+        {
+          id: "accepted",
+          role: "reference",
+          referenceType: "accepted",
+          title: "Accepted",
+          html: "<p>A</p>",
+        },
+      ],
+    });
+
+    await expect(
+      manager.updateReviewItem({
+        sessionId: session.sessionId,
+        boardId: "locked",
+        itemId: "accepted",
+        html: "<p>Changed</p>",
+      }),
+    ).rejects.toThrow("Locked reference review item cannot be updated");
+
+    await expect(
+      manager.archiveReviewItem({
+        sessionId: session.sessionId,
+        boardId: "locked",
+        itemId: "accepted",
+      }),
+    ).rejects.toThrow("Locked reference review item cannot be archived");
+  });
+});
+
 async function startTestSession(): Promise<{ manager: SessionManager; session: StartSessionOutput }> {
   const manager = new SessionManager();
   managers.push(manager);

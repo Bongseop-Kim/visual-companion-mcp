@@ -4,16 +4,28 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { appendEvent, readEvents } from "./events";
 import { isFullHtmlDocument, renderScreenHtml } from "./frame";
+import { renderReviewBoardTemplate } from "./templates";
 import {
+  reviewBoardSchema,
   eventSchema,
   wireframeSummarySchema,
   startSessionInputSchema,
+  type AcceptReviewItemInput,
+  type AddReviewItemsInput,
+  type ArchiveReviewItemInput,
   type CompanionEvent,
+  type ReadReviewBoardInput,
   type ReadCurrentWireframeSummaryOutput,
+  type ReviewBoard,
+  type ReviewBoardOutput,
+  type ReviewItem,
+  type ReviewItemInput,
   type ShowScreenInput,
   type ShowScreenOutput,
+  type ShowReviewBoardInput,
   type StartSessionInput,
   type StartSessionOutput,
+  type UpdateReviewItemInput,
   type WaitForSelectionInput,
   type WaitForSelectionOutput,
   type WireframeSummary,
@@ -222,6 +234,99 @@ export class SessionManager {
     return { sessionId: session.id, filePath, reloadedClients, updatedClients, screenVersion, wireframeSummaryPath };
   }
 
+  async showReviewBoard(input: ShowReviewBoardInput): Promise<ReviewBoardOutput> {
+    const session = this.getSession(input.sessionId);
+    this.markActivity(session);
+    const now = new Date().toISOString();
+    const board: ReviewBoard = reviewBoardSchema.parse({
+      sessionId: session.id,
+      boardId: input.boardId,
+      title: input.title,
+      currentReferenceId: input.currentReferenceId,
+      acceptedItemIds: [],
+      items: input.items.map((item) => normalizeReviewItem(item, now)),
+      screenVersion: session.screenVersion,
+      updatedAt: now,
+    });
+    assertUniqueReviewItems(board.items);
+    board.acceptedItemIds = acceptedReviewItemIds(board);
+    return this.renderAndSaveReviewBoard(session, board, input.filename);
+  }
+
+  async updateReviewItem(input: UpdateReviewItemInput): Promise<ReviewBoardOutput> {
+    const session = this.getSession(input.sessionId);
+    this.markActivity(session);
+    const board = await this.loadReviewBoard(session, input.boardId);
+    const item = findReviewItem(board, input.itemId);
+    assertMutableReviewItem(item, "update");
+    const now = new Date().toISOString();
+    item.html = input.html;
+    item.title = input.title ?? item.title;
+    item.changeSummary = input.changeSummary ?? item.changeSummary;
+    item.version += 1;
+    item.updatedAt = now;
+    board.updatedAt = now;
+    return this.renderAndSaveReviewBoard(session, board, input.filename);
+  }
+
+  async addReviewItems(input: AddReviewItemsInput): Promise<ReviewBoardOutput> {
+    const session = this.getSession(input.sessionId);
+    this.markActivity(session);
+    const board = await this.loadReviewBoard(session, input.boardId);
+    const existingIds = new Set(board.items.map((item) => item.id));
+    const now = new Date().toISOString();
+    const additions = input.items.map((item) => normalizeReviewItem(item, now));
+    for (const item of additions) {
+      if (existingIds.has(item.id)) {
+        throw new Error(`Review item already exists: ${item.id}`);
+      }
+      existingIds.add(item.id);
+    }
+    board.items.push(...additions);
+    board.acceptedItemIds = acceptedReviewItemIds(board);
+    board.updatedAt = now;
+    return this.renderAndSaveReviewBoard(session, board, input.filename);
+  }
+
+  async acceptReviewItem(input: AcceptReviewItemInput): Promise<ReviewBoardOutput> {
+    const session = this.getSession(input.sessionId);
+    this.markActivity(session);
+    const board = await this.loadReviewBoard(session, input.boardId);
+    const item = findReviewItem(board, input.itemId);
+    const now = new Date().toISOString();
+    item.role = "reference";
+    item.referenceType = "accepted";
+    item.locked = true;
+    item.archived = false;
+    item.temporary = false;
+    item.version += 1;
+    item.updatedAt = now;
+    board.acceptedItemIds = acceptedReviewItemIds(board);
+    board.updatedAt = now;
+    return this.renderAndSaveReviewBoard(session, board, input.filename);
+  }
+
+  async archiveReviewItem(input: ArchiveReviewItemInput): Promise<ReviewBoardOutput> {
+    const session = this.getSession(input.sessionId);
+    this.markActivity(session);
+    const board = await this.loadReviewBoard(session, input.boardId);
+    const item = findReviewItem(board, input.itemId);
+    assertMutableReviewItem(item, "archive");
+    const now = new Date().toISOString();
+    item.archived = true;
+    item.version += 1;
+    item.updatedAt = now;
+    board.acceptedItemIds = acceptedReviewItemIds(board);
+    board.updatedAt = now;
+    return this.renderAndSaveReviewBoard(session, board, input.filename);
+  }
+
+  async readReviewBoard(input: ReadReviewBoardInput): Promise<ReviewBoardOutput> {
+    const session = this.getSession(input.sessionId);
+    this.markActivity(session);
+    return this.loadReviewBoard(session, input.boardId);
+  }
+
   async readEvents(input: { sessionId: string; clear?: boolean }): Promise<CompanionEvent[]> {
     const session = this.getSession(input.sessionId);
     this.markActivity(session);
@@ -367,6 +472,38 @@ export class SessionManager {
     session.currentWireframeSummaryPath = summaryPath;
     return summaryPath;
   }
+
+  private async loadReviewBoard(session: Session, boardId: string): Promise<ReviewBoard> {
+    const boardPath = reviewBoardPath(session, boardId);
+    const content = await readFile(boardPath, "utf8");
+    return reviewBoardSchema.parse(JSON.parse(content));
+  }
+
+  private async renderAndSaveReviewBoard(
+    session: Session,
+    board: ReviewBoard,
+    filename: string | undefined,
+  ): Promise<ReviewBoardOutput> {
+    const html = renderReviewBoardTemplate(board);
+    const shown = await this.showScreen({
+      sessionId: session.id,
+      filename: filename ?? "review-board.html",
+      html,
+      clearEvents: false,
+    });
+    const updatedBoard = reviewBoardSchema.parse({
+      ...board,
+      screenVersion: shown.screenVersion,
+      updatedAt: new Date().toISOString(),
+    });
+    await writeFile(reviewBoardPath(session, board.boardId), `${JSON.stringify(updatedBoard, null, 2)}\n`, "utf8");
+    return {
+      ...updatedBoard,
+      filePath: shown.filePath,
+      reloadedClients: shown.reloadedClients,
+      updatedClients: shown.updatedClients,
+    };
+  }
 }
 
 function buildDeliveryMessage(
@@ -418,6 +555,62 @@ function bodyHtml(html: string): string {
   if (!isFullHtmlDocument(html)) return html;
   const match = html.match(/<body\b[^>]*>([\s\S]*?)<\/body\s*>/i);
   return match?.[1] ?? html;
+}
+
+function normalizeReviewItem(item: ReviewItemInput, now: string): ReviewItem {
+  return {
+    id: item.id,
+    role: item.role,
+    title: item.title,
+    html: item.html,
+    version: item.version ?? 1,
+    referenceType: item.referenceType,
+    locked: item.locked ?? (item.role === "reference" && item.referenceType === "accepted"),
+    archived: item.archived ?? false,
+    temporary: item.temporary ?? false,
+    basedOnId: item.basedOnId,
+    changeSummary: item.changeSummary,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function findReviewItem(board: ReviewBoard, itemId: string): ReviewItem {
+  const item = board.items.find((candidate) => candidate.id === itemId);
+  if (!item) throw new Error(`Unknown review item: ${itemId}`);
+  return item;
+}
+
+function assertUniqueReviewItems(items: ReviewItem[]): void {
+  const seen = new Set<string>();
+  for (const item of items) {
+    if (seen.has(item.id)) throw new Error(`Duplicate review item: ${item.id}`);
+    seen.add(item.id);
+  }
+}
+
+function assertMutableReviewItem(item: ReviewItem, action: "update" | "archive"): void {
+  if (item.role === "reference" && item.locked) {
+    throw new Error(`Locked reference review item cannot be ${action}d: ${item.id}`);
+  }
+}
+
+function acceptedReviewItemIds(board: ReviewBoard): string[] {
+  return board.items
+    .filter((item) => item.role === "reference" && item.referenceType === "accepted" && !item.archived)
+    .map((item) => item.id);
+}
+
+function reviewBoardPath(session: Session, boardId: string): string {
+  return join(session.workDir, `${sanitizeStorageName(boardId)}.review-board.json`);
+}
+
+function sanitizeStorageName(value: string): string {
+  const cleaned = basename(value);
+  if (cleaned !== value || cleaned === "." || cleaned === ".." || cleaned.length === 0) {
+    throw new Error("boardId must be a simple identifier");
+  }
+  return cleaned.replace(/[^a-zA-Z0-9._-]/g, "-");
 }
 
 function filterEvents(events: CompanionEvent[], sinceScreenVersion: number | undefined): CompanionEvent[] {
