@@ -16,9 +16,13 @@ It is designed for visual collaboration loops such as layout choices, wireframes
   - `show_wireframe`
   - `show_review_board`
   - `update_review_item`
+  - `add_draft_for_reference`
+  - `update_draft_for_reference`
   - `add_review_items`
   - `accept_review_item`
   - `archive_review_item`
+  - `import_reference_image`
+  - `request_reference_image`
   - `read_review_board`
   - `read_events`
   - `wait_for_selection`
@@ -32,6 +36,7 @@ It is designed for visual collaboration loops such as layout choices, wireframes
 - Multiple sessions can run in one MCP process on separate local ports.
 - Fast choice templates for common selection loops; use `show_choice_grid`, `show_options`, `show_cards`, or `show_comparison` before falling back to raw `show_screen`.
 - Review Board state for multi-draft reviews; reference items such as current and accepted screens are preserved while individual drafts or proposals are updated.
+- Universal screenshot reference capture; users can paste or drop web, mobile, Expo, native app, or design-tool screenshots into the browser session as locked references.
 - Optional lightweight wireframe summaries can be saved beside wireframe screens and read back as structured MCP output.
 - Built-in CSS classes for common visual patterns: `.options`, `.cards`, `.choice-grid`, `.mockup`, `.split`, `.pros-cons`.
 
@@ -165,9 +170,13 @@ enabled_tools = [
   "show_wireframe",
   "show_review_board",
   "update_review_item",
+  "add_draft_for_reference",
+  "update_draft_for_reference",
   "add_review_items",
   "accept_review_item",
   "archive_review_item",
+  "import_reference_image",
+  "request_reference_image",
   "read_review_board",
   "read_events",
   "wait_for_selection",
@@ -202,9 +211,13 @@ Expected output:
     "show_wireframe",
     "show_review_board",
     "update_review_item",
+    "add_draft_for_reference",
+    "update_draft_for_reference",
     "add_review_items",
     "accept_review_item",
     "archive_review_item",
+    "import_reference_image",
+    "request_reference_image",
     "read_review_board",
     "read_events",
     "wait_for_selection",
@@ -271,11 +284,16 @@ Use this flow:
 4. If the screen includes overlays or multi-step flows, include a review view
    that expands the important states after the baseline unless the user only
    asked for exact runtime behavior.
-5. For multi-draft reviews, use `show_review_board`; for later edits use
-   `update_review_item`, `add_review_items`, `accept_review_item`, or
-   `archive_review_item`. For fast one-off choices, prefer `show_choice_grid`,
-   `show_options`, `show_cards`, or `show_comparison`; use `show_screen` for
-   custom HTML.
+5. For multi-draft reviews, use `show_review_board`; for any real current
+   screen shown in web, mobile, Expo, native apps, or design tools, prefer
+   `request_reference_image` so the user can paste or drop a screenshot as a
+   locked baseline. Use `import_reference_image` when a local image file path is
+   already available. Add and revise HTML variants with
+   `add_draft_for_reference` and `update_draft_for_reference`. For later
+   advanced edits use `update_review_item`, `add_review_items`,
+   `accept_review_item`, or `archive_review_item`. For fast one-off choices,
+   prefer `show_choice_grid`, `show_options`, `show_cards`, or
+   `show_comparison`; use `show_screen` for custom HTML.
 6. Give the returned URL to the user and state what source page/component it is
    based on.
 7. If feedback is needed, use `wait_for_selection` with the returned
@@ -296,9 +314,9 @@ horizontal-scroll interaction.
 When a review includes multiple drafts, accepted screens, or the current
 implementation as a baseline, use Review Board tools. Put protected current or
 accepted screens in `reference` items, active alternatives in `draft` items, and
-new ideas in `proposal` items. Later requests to change one specific screen
-should call `update_review_item` for that item id instead of replacing the whole
-browser view.
+new ideas in `proposal` items. Later requests to change one linked draft should
+call `update_draft_for_reference`; use `update_review_item` only for advanced
+board edits instead of replacing the whole browser view.
 ```
 
 ## Tool Overview
@@ -362,7 +380,7 @@ Writes and displays a selectable wireframe. `variant` can be `desktop`, `mobile`
 Use Review Board tools for multi-draft visual review where current screens,
 accepted drafts, or pinned references must not disappear during later edits.
 
-Review items have `id`, `role`, `title`, and `html`. Roles are:
+Review items have `id`, `role`, `title`, and either HTML content or image metadata. Roles are:
 
 - `reference`: preserved baseline item, such as `referenceType: "current"` or `referenceType: "accepted"`.
 - `draft`: active comparison or modification candidate.
@@ -379,6 +397,17 @@ Creates or replaces a board and renders visible items as Reference, Draft, and P
 Updates exactly one board item and re-renders the full board. Other references,
 drafts, and proposals are preserved. Locked references cannot be updated.
 
+### `add_draft_for_reference({ sessionId, boardId, referenceItemId, draftId, title, html, changeSummary?, filename? })`
+
+Adds a single HTML draft linked to an existing reference item. Use this after
+`request_reference_image` or `import_reference_image` so the real current screen
+stays fixed while the draft appears beside it.
+
+### `update_draft_for_reference({ sessionId, boardId, draftId, html, title?, changeSummary?, filename? })`
+
+Updates one existing HTML draft only. It refuses to update reference, proposal,
+or image items, which keeps the baseline safe during rapid visual iteration.
+
 ### `add_review_items({ sessionId, boardId, items, filename? })`
 
 Adds new items to an existing board without replacing existing items.
@@ -392,6 +421,27 @@ Promotes an item to `role: "reference"`, `referenceType: "accepted"`, and
 
 Hides a mutable item from the default render without deleting it. Locked
 references cannot be archived.
+
+### `import_reference_image({ sessionId, boardId, itemId, title, imagePath, imageAlt?, filename? })`
+
+Imports a local `.png`, `.jpg`, `.jpeg`, or `.webp` screenshot as a locked
+current reference item on a Review Board. The image is copied into the session's
+`assets/` directory and rendered beside later drafts without replacing existing
+references or drafts.
+
+Use this for Expo, React Native, native mobile, or manually captured screens
+where the real current UI should be preserved as the source-of-truth reference
+instead of being recreated as HTML.
+
+### `request_reference_image({ sessionId, boardId, itemId, title, imageAlt?, filename?, timeoutMs? })`
+
+Shows a paste/drop upload screen in the browser session. The user can paste,
+drop, or choose a PNG, JPEG, or WebP screenshot from any source, and the server
+saves it as a locked current reference item on the Review Board.
+
+Use this as the default current-screen baseline flow when the user already has a
+screen visible. It avoids runtime-specific automation and works the same for web,
+mobile, Expo, native apps, and design tools.
 
 ### `read_review_board({ sessionId, boardId })`
 

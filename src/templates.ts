@@ -2,6 +2,7 @@ import { escapeHtml, escapeHtmlAttribute } from "./frame";
 import {
   DEFAULT_REQUESTED_SCHEMA,
   type RequestUserInput,
+  type RequestReferenceImageInput,
   type ReviewBoard,
   type ReviewItem,
   type ShowCardsInput,
@@ -97,7 +98,10 @@ export function renderWireframeTemplate(input: ShowWireframeInput): string {
 export function renderReviewBoardTemplate(board: ReviewBoard): string {
   const visibleItems = board.items.filter((item) => !item.archived);
   const references = visibleItems.filter((item) => item.role === "reference");
-  const drafts = visibleItems.filter((item) => item.role === "draft");
+  const referenceIds = new Set(references.map((item) => item.id));
+  const linkedDrafts = visibleItems.filter((item) => item.role === "draft" && item.basedOnId && referenceIds.has(item.basedOnId));
+  const linkedDraftIds = new Set(linkedDrafts.map((item) => item.id));
+  const drafts = visibleItems.filter((item) => item.role === "draft" && !linkedDraftIds.has(item.id));
   const proposals = visibleItems.filter((item) => item.role === "proposal");
 
   return `<style>
@@ -107,6 +111,8 @@ export function renderReviewBoardTemplate(board: ReviewBoard): string {
 .review-board-heading h3 { margin: 0; font-size: 15px; color: #344054; }
 .review-board-count { color: #667085; font-size: 12px; font-weight: 700; }
 .review-board-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+.review-reference-group { display: grid; gap: 10px; }
+.review-linked-drafts { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; padding-left: 12px; border-left: 3px solid #e6e9f1; }
 .review-item { border: 1px solid #d7dce8; border-radius: 8px; background: #fff; overflow: hidden; }
 .review-item-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border-bottom: 1px solid #eef1f6; background: #fbfcff; }
 .review-item-title { font-weight: 800; color: #182230; }
@@ -114,11 +120,15 @@ export function renderReviewBoardTemplate(board: ReviewBoard): string {
 .review-badge { border: 1px solid #d0d5dd; border-radius: 999px; padding: 2px 7px; color: #475467; font-size: 11px; font-weight: 700; background: #fff; }
 .review-badge.locked { border-color: #fedf89; color: #93370d; background: #fffbeb; }
 .review-item-body { padding: 12px; }
+.review-reference-image {
+  display: block; width: 100%; max-width: 100%; height: auto;
+  border: 1px solid #e6e9f1; border-radius: 6px; background: #f8fafc;
+}
 .review-change-summary { margin: 0; padding: 8px 12px 10px; border-top: 1px solid #eef1f6; color: #667085; font-size: 13px; }
 </style>
 ${renderHeading(board.title ?? "Review Board", `Board ${board.boardId}`)}
 <div class="review-board" data-review-board-id="${escapeHtmlAttribute(board.boardId)}">
-  ${renderReviewSection("Reference", references)}
+  ${renderReferenceSection(references, linkedDrafts)}
   ${renderReviewSection("Draft", drafts)}
   ${renderReviewSection("Proposal", proposals)}
 </div>`;
@@ -165,6 +175,120 @@ export function renderInputRequestTemplate(input: RequestUserInput): string {
 </script>`;
 }
 
+export function renderReferenceImageRequestTemplate(input: RequestReferenceImageInput): string {
+  return `${renderHeading(input.title, "Paste, drop, or choose a screenshot to preserve it as the locked reference.")}
+<style>
+.reference-upload {
+  display: grid; gap: 16px; min-height: 420px;
+}
+.reference-dropzone {
+  display: grid; place-items: center; gap: 12px; min-height: 300px;
+  border: 2px dashed #98a2b3; border-radius: 8px; background: #fff; padding: 28px;
+  text-align: center; cursor: pointer;
+}
+.reference-dropzone.dragging { border-color: #315cff; background: #f5f7ff; }
+.reference-dropzone strong { color: #172033; font-size: 18px; }
+.reference-dropzone span { color: #667085; }
+.reference-preview { display: none; max-width: min(100%, 520px); max-height: 420px; border: 1px solid #d7dce8; border-radius: 8px; background: #f8fafc; }
+.reference-preview.visible { display: block; }
+.reference-status { min-height: 22px; color: #475467; font-weight: 700; }
+.reference-status.error { color: #b42318; }
+.reference-actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+</style>
+<section class="reference-upload">
+  <div id="reference-dropzone" class="reference-dropzone" tabindex="0" role="button">
+    <strong>Drop or paste a screenshot</strong>
+    <span>PNG, JPEG, or WebP. Click to choose a file.</span>
+    <img id="reference-preview" class="reference-preview" alt="">
+  </div>
+  <div class="reference-actions">
+    <button id="reference-choose" class="mock-button" type="button">Choose image</button>
+    <input id="reference-file" type="file" accept="image/png,image/jpeg,image/webp" hidden>
+    <span id="reference-status" class="reference-status">Waiting for an image.</span>
+  </div>
+</section>
+<script>
+(() => {
+  const dropzone = document.getElementById("reference-dropzone");
+  const choose = document.getElementById("reference-choose");
+  const fileInput = document.getElementById("reference-file");
+  const status = document.getElementById("reference-status");
+  const preview = document.getElementById("reference-preview");
+  const query = new URLSearchParams({
+    boardId: ${JSON.stringify(input.boardId)},
+    itemId: ${JSON.stringify(input.itemId)},
+    title: ${JSON.stringify(input.title)},
+    imageAlt: ${JSON.stringify(input.imageAlt ?? input.title)},
+    filename: ${JSON.stringify(input.filename ?? "review-board.html")},
+  });
+
+  function setStatus(message, error = false) {
+    status.textContent = message;
+    status.classList.toggle("error", error);
+  }
+
+  function pickImageFromItems(items) {
+    for (const item of items || []) {
+      if (item.kind === "file" && item.type && item.type.startsWith("image/")) return item.getAsFile();
+    }
+    return null;
+  }
+
+  async function upload(file) {
+    if (!file || !file.type || !file.type.startsWith("image/")) {
+      setStatus("Choose a PNG, JPEG, or WebP image.", true);
+      return;
+    }
+    preview.src = URL.createObjectURL(file);
+    preview.classList.add("visible");
+    setStatus("Uploading reference image...");
+    try {
+      const response = await fetch("/reference-image-upload?" + query.toString(), {
+        method: "POST",
+        headers: { "content-type": file.type },
+        body: file,
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(result.error || "Upload failed.");
+      }
+      setStatus("Reference saved. The review board will open automatically.");
+      window.recordCompanionEvent({
+        type: "reference-image-upload",
+        choice: ${JSON.stringify(input.itemId)},
+        text: file.name || "uploaded image",
+        content: { boardId: ${JSON.stringify(input.boardId)}, itemId: ${JSON.stringify(input.itemId)} },
+      });
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Upload failed.", true);
+    }
+  }
+
+  document.addEventListener("paste", (event) => {
+    const file = pickImageFromItems(event.clipboardData?.items);
+    if (file) {
+      event.preventDefault();
+      void upload(file);
+    }
+  });
+  dropzone.addEventListener("dragover", (event) => {
+    event.preventDefault();
+    dropzone.classList.add("dragging");
+  });
+  dropzone.addEventListener("dragleave", () => dropzone.classList.remove("dragging"));
+  dropzone.addEventListener("drop", (event) => {
+    event.preventDefault();
+    dropzone.classList.remove("dragging");
+    const file = Array.from(event.dataTransfer?.files || []).find((candidate) => candidate.type.startsWith("image/"));
+    void upload(file);
+  });
+  dropzone.addEventListener("click", () => fileInput.click());
+  choose.addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", () => void upload(fileInput.files?.[0]));
+})();
+</script>`;
+}
+
 function renderHeading(title: string, subtitle?: string): string {
   return `<h2>${escapeHtml(title)}</h2>${subtitle ? `<p class="subtitle">${escapeHtml(subtitle)}</p>` : ""}`;
 }
@@ -179,6 +303,27 @@ function renderReviewSection(title: string, items: ReviewItem[]): string {
       ${items.length > 0 ? items.map(renderReviewItem).join("\n") : `<div class="placeholder">No ${escapeHtml(title.toLowerCase())} items.</div>`}
     </div>
   </section>`;
+}
+
+function renderReferenceSection(references: ReviewItem[], linkedDrafts: ReviewItem[]): string {
+  const count = references.length + linkedDrafts.length;
+  return `<section class="review-board-section" data-review-section="reference">
+    <div class="review-board-heading">
+      <h3>Reference</h3>
+      <span class="review-board-count">${count}</span>
+    </div>
+    <div class="review-board-grid">
+      ${references.length > 0 ? references.map((item) => renderReferenceGroup(item, linkedDrafts)).join("\n") : `<div class="placeholder">No reference items.</div>`}
+    </div>
+  </section>`;
+}
+
+function renderReferenceGroup(reference: ReviewItem, linkedDrafts: ReviewItem[]): string {
+  const drafts = linkedDrafts.filter((item) => item.basedOnId === reference.id);
+  return `<div class="review-reference-group" data-review-reference-group="${escapeHtmlAttribute(reference.id)}">
+    ${renderReviewItem(reference)}
+    ${drafts.length > 0 ? `<div class="review-linked-drafts">${drafts.map(renderReviewItem).join("\n")}</div>` : ""}
+  </div>`;
 }
 
 function renderReviewItem(item: ReviewItem): string {
@@ -196,9 +341,18 @@ function renderReviewItem(item: ReviewItem): string {
         ${badges.map((badge) => `<span class="review-badge${badge === "locked" ? " locked" : ""}">${escapeHtml(String(badge))}</span>`).join("")}
       </div>
     </div>
-    <div class="review-item-body">${item.html}</div>
+    <div class="review-item-body">${renderReviewItemBody(item)}</div>
     ${item.changeSummary ? `<p class="review-change-summary">${escapeHtml(item.changeSummary)}</p>` : ""}
   </article>`;
+}
+
+function renderReviewItemBody(item: ReviewItem): string {
+  if (item.kind === "image") {
+    if (!item.imagePath) return `<div class="placeholder">Missing image reference.</div>`;
+    const alt = item.imageAlt ?? item.title;
+    return `<img class="review-reference-image" src="${escapeHtmlAttribute(item.imagePath)}" alt="${escapeHtmlAttribute(alt)}">`;
+  }
+  return item.html ?? "";
 }
 
 function renderOption(

@@ -1,19 +1,24 @@
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { appendEvent, readEvents } from "./events";
 import { isFullHtmlDocument, renderScreenHtml } from "./frame";
-import { renderReviewBoardTemplate } from "./templates";
+import { renderReferenceImageRequestTemplate, renderReviewBoardTemplate } from "./templates";
 import {
   reviewBoardSchema,
   eventSchema,
   wireframeSummarySchema,
   startSessionInputSchema,
+  requestReferenceImageInputSchema,
   type AcceptReviewItemInput,
+  type AddDraftForReferenceInput,
   type AddReviewItemsInput,
   type ArchiveReviewItemInput,
   type CompanionEvent,
+  type ImportReferenceImageInput,
+  type RequestReferenceImageInput,
+  type RequestReferenceImageOutput,
   type ReadReviewBoardInput,
   type ReadCurrentWireframeSummaryOutput,
   type ReviewBoard,
@@ -26,6 +31,7 @@ import {
   type StartSessionInput,
   type StartSessionOutput,
   type UpdateReviewItemInput,
+  type UpdateDraftForReferenceInput,
   type WaitForSelectionInput,
   type WaitForSelectionOutput,
   type WireframeSummary,
@@ -35,6 +41,10 @@ type Client = Bun.ServerWebSocket<unknown>;
 type ShowScreenWithSummaryInput = ShowScreenInput & {
   wireframeSummary?: WireframeSummary | undefined;
 };
+type ReferenceImageUploadResult =
+  | { ok: true; board: ReviewBoardOutput }
+  | { ok: false; error: Error };
+type ReferenceImageUploadWaiter = (result: ReferenceImageUploadResult) => void;
 
 interface Session {
   id: string;
@@ -42,6 +52,7 @@ interface Session {
   url: string;
   workDir: string;
   screenDir: string;
+  assetsDir: string;
   eventsPath: string;
   server: Bun.Server<unknown>;
   clients: Set<Client>;
@@ -50,6 +61,7 @@ interface Session {
   currentWireframeSummaryPath: string | null;
   recentEvents: CompanionEvent[];
   waiters: Set<(event: CompanionEvent) => void>;
+  referenceImageWaiters: Map<string, Set<ReferenceImageUploadWaiter>>;
   idleTimer: ReturnType<typeof setTimeout> | null;
   maxLifetimeTimer: ReturnType<typeof setTimeout> | null;
 }
@@ -61,6 +73,7 @@ export interface SessionManagerOptions {
 
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_MAX_LIFETIME_MS = 2 * 60 * 60 * 1000;
+const MAX_REFERENCE_IMAGE_BYTES = 15 * 1024 * 1024;
 
 export class SessionManager {
   private readonly sessions = new Map<string, Session>();
@@ -78,11 +91,13 @@ export class SessionManager {
     const baseDir = await resolveSessionBaseDir(options.baseDir);
     const workDir = join(baseDir, sessionId);
     const screenDir = join(workDir, "screens");
+    const assetsDir = join(workDir, "assets");
     const eventsPath = join(workDir, "events.jsonl");
     const initialHtml = readyScreenHtml(sessionId);
     await mkdir(workDir, { recursive: true });
     await Promise.all([
       mkdir(screenDir, { recursive: true }),
+      mkdir(assetsDir, { recursive: true }),
       writeFile(eventsPath, "", { flag: "a" }),
     ]);
 
@@ -107,6 +122,16 @@ export class SessionManager {
         if (url.pathname === "/healthz") {
           this.markActivity(session);
           return Response.json({ ok: true, sessionId });
+        }
+
+        if (url.pathname.startsWith("/assets/")) {
+          this.markActivity(session);
+          return serveAsset(session, url.pathname);
+        }
+
+        if (url.pathname === "/reference-image-upload" && request.method === "POST") {
+          this.markActivity(session);
+          return manager.handleReferenceImageUpload(session, request, url);
         }
 
         this.markActivity(session);
@@ -154,6 +179,7 @@ export class SessionManager {
       url: `http://${options.urlHost}:${port}`,
       workDir,
       screenDir,
+      assetsDir,
       eventsPath,
       server,
       clients,
@@ -162,6 +188,7 @@ export class SessionManager {
       currentWireframeSummaryPath: null,
       recentEvents: [],
       waiters,
+      referenceImageWaiters: new Map(),
       idleTimer: null,
       maxLifetimeTimer: null,
     };
@@ -259,6 +286,55 @@ export class SessionManager {
     const board = await this.loadReviewBoard(session, input.boardId);
     const item = findReviewItem(board, input.itemId);
     assertMutableReviewItem(item, "update");
+    if (item.kind === "image") {
+      throw new Error(`Image review item cannot be updated with HTML: ${item.id}`);
+    }
+    const now = new Date().toISOString();
+    item.html = input.html;
+    item.kind = "html";
+    item.title = input.title ?? item.title;
+    item.changeSummary = input.changeSummary ?? item.changeSummary;
+    item.version += 1;
+    item.updatedAt = now;
+    board.updatedAt = now;
+    return this.renderAndSaveReviewBoard(session, board, input.filename);
+  }
+
+  async addDraftForReference(input: AddDraftForReferenceInput): Promise<ReviewBoardOutput> {
+    const session = this.getSession(input.sessionId);
+    this.markActivity(session);
+    const board = await this.loadReviewBoard(session, input.boardId);
+    const reference = findReviewItem(board, input.referenceItemId);
+    assertReferenceItem(reference);
+    if (board.items.some((item) => item.id === input.draftId)) {
+      throw new Error(`Review item already exists: ${input.draftId}`);
+    }
+
+    const now = new Date().toISOString();
+    board.items.push(
+      normalizeReviewItem(
+        {
+          id: input.draftId,
+          role: "draft",
+          title: input.title,
+          kind: "html",
+          html: input.html,
+          basedOnId: input.referenceItemId,
+          changeSummary: input.changeSummary,
+        },
+        now,
+      ),
+    );
+    board.updatedAt = now;
+    return this.renderAndSaveReviewBoard(session, board, input.filename);
+  }
+
+  async updateDraftForReference(input: UpdateDraftForReferenceInput): Promise<ReviewBoardOutput> {
+    const session = this.getSession(input.sessionId);
+    this.markActivity(session);
+    const board = await this.loadReviewBoard(session, input.boardId);
+    const item = findReviewItem(board, input.draftId);
+    assertDraftHtmlItem(item);
     const now = new Date().toISOString();
     item.html = input.html;
     item.title = input.title ?? item.title;
@@ -319,6 +395,55 @@ export class SessionManager {
     board.acceptedItemIds = acceptedReviewItemIds(board);
     board.updatedAt = now;
     return this.renderAndSaveReviewBoard(session, board, input.filename);
+  }
+
+  async importReferenceImage(input: ImportReferenceImageInput): Promise<ReviewBoardOutput> {
+    const session = this.getSession(input.sessionId);
+    this.markActivity(session);
+    const sourcePath = resolveLocalFile(input.imagePath);
+    const mimeType = imageMimeTypeForPath(sourcePath);
+    await assertReadableFile(sourcePath);
+
+    const assetFilename = await this.copyReferenceImageAsset(session, input.itemId, sourcePath);
+    return this.addReferenceImageAsset(session, {
+      boardId: input.boardId,
+      itemId: input.itemId,
+      title: input.title,
+      imageAlt: input.imageAlt,
+      filename: input.filename,
+      assetFilename,
+      mimeType,
+    });
+  }
+
+  async requestReferenceImage(input: RequestReferenceImageInput): Promise<RequestReferenceImageOutput> {
+    const parsed = requestReferenceImageInputSchema.parse(input);
+    const session = this.getSession(parsed.sessionId);
+    this.markActivity(session);
+    const screen = await this.showScreen({
+      sessionId: session.id,
+      filename: `reference-image-${sanitizeStorageName(parsed.boardId)}-${sanitizeStorageName(parsed.itemId)}.html`,
+      html: renderReferenceImageRequestTemplate(parsed),
+      clearEvents: false,
+    });
+    const key = referenceImageUploadKey(parsed.boardId, parsed.itemId);
+    const result = await this.waitForReferenceImageUpload(session, key, parsed.timeoutMs);
+    if (result.ok) {
+      return {
+        ...result.board,
+        timedOut: false,
+        uploadScreenVersion: screen.screenVersion,
+      };
+    }
+    if (result.error.message === "Timed out waiting for reference image upload") {
+      return {
+        sessionId: session.id,
+        boardId: parsed.boardId,
+        timedOut: true,
+        uploadScreenVersion: screen.screenVersion,
+      };
+    }
+    throw result.error;
   }
 
   async readReviewBoard(input: ReadReviewBoardInput): Promise<ReviewBoardOutput> {
@@ -402,6 +527,7 @@ export class SessionManager {
     session.idleTimer = clearIdleTimer(session.idleTimer);
     session.maxLifetimeTimer = clearIdleTimer(session.maxLifetimeTimer);
     session.waiters.clear();
+    session.referenceImageWaiters.clear();
     for (const client of session.clients) client.close();
     session.server.stop(true);
     return true;
@@ -479,6 +605,141 @@ export class SessionManager {
     return reviewBoardSchema.parse(JSON.parse(content));
   }
 
+  private async loadReviewBoardIfExists(session: Session, boardId: string): Promise<ReviewBoard | null> {
+    try {
+      return await this.loadReviewBoard(session, boardId);
+    } catch (error) {
+      if (isNodeError(error) && error.code === "ENOENT") return null;
+      throw error;
+    }
+  }
+
+  private async copyReferenceImageAsset(session: Session, itemId: string, sourcePath: string): Promise<string> {
+    const extension = extname(sourcePath).toLowerCase();
+    const filename = `${sanitizeStorageName(itemId)}${extension}`;
+    await copyFile(sourcePath, join(session.assetsDir, filename));
+    return filename;
+  }
+
+  private async writeReferenceImageAsset(
+    session: Session,
+    itemId: string,
+    extension: ".png" | ".jpg" | ".webp",
+    bytes: Uint8Array,
+  ): Promise<string> {
+    const filename = `${sanitizeStorageName(itemId)}${extension}`;
+    await writeFile(join(session.assetsDir, filename), bytes);
+    return filename;
+  }
+
+  private async addReferenceImageAsset(
+    session: Session,
+    input: {
+      boardId: string;
+      itemId: string;
+      title: string;
+      imageAlt?: string | undefined;
+      filename?: string | undefined;
+      assetFilename: string;
+      mimeType: "image/png" | "image/jpeg" | "image/webp";
+    },
+  ): Promise<ReviewBoardOutput> {
+    const now = new Date().toISOString();
+    const board = (await this.loadReviewBoardIfExists(session, input.boardId)) ?? reviewBoardSchema.parse({
+      sessionId: session.id,
+      boardId: input.boardId,
+      currentReferenceId: input.itemId,
+      acceptedItemIds: [],
+      items: [],
+      screenVersion: session.screenVersion,
+      updatedAt: now,
+    });
+    if (board.items.some((item) => item.id === input.itemId)) {
+      throw new Error(`Review item already exists: ${input.itemId}`);
+    }
+
+    board.items.push(
+      normalizeReviewItem(
+        {
+          id: input.itemId,
+          role: "reference",
+          referenceType: "current",
+          locked: true,
+          title: input.title,
+          kind: "image",
+          imagePath: `assets/${input.assetFilename}`,
+          imageMimeType: input.mimeType,
+          imageAlt: input.imageAlt ?? input.title,
+        },
+        now,
+      ),
+    );
+    board.currentReferenceId = board.currentReferenceId ?? input.itemId;
+    board.acceptedItemIds = acceptedReviewItemIds(board);
+    board.updatedAt = now;
+    return this.renderAndSaveReviewBoard(session, board, input.filename);
+  }
+
+  private waitForReferenceImageUpload(
+    session: Session,
+    key: string,
+    timeoutMs: number,
+  ): Promise<ReferenceImageUploadResult> {
+    return new Promise((resolve) => {
+      const onUpload: ReferenceImageUploadWaiter = (result) => {
+        clearTimeout(timeout);
+        const waiters = session.referenceImageWaiters.get(key);
+        waiters?.delete(onUpload);
+        if (waiters?.size === 0) session.referenceImageWaiters.delete(key);
+        resolve(result);
+      };
+      const timeout = setTimeout(() => {
+        const waiters = session.referenceImageWaiters.get(key);
+        waiters?.delete(onUpload);
+        if (waiters?.size === 0) session.referenceImageWaiters.delete(key);
+        resolve({ ok: false, error: new Error("Timed out waiting for reference image upload") });
+      }, timeoutMs);
+      let waiters = session.referenceImageWaiters.get(key);
+      if (!waiters) {
+        waiters = new Set();
+        session.referenceImageWaiters.set(key, waiters);
+      }
+      waiters.add(onUpload);
+    });
+  }
+
+  private notifyReferenceImageUpload(session: Session, key: string, result: ReferenceImageUploadResult): void {
+    const waiters = session.referenceImageWaiters.get(key);
+    if (!waiters) return;
+    for (const waiter of [...waiters]) waiter(result);
+  }
+
+  private async handleReferenceImageUpload(session: Session, request: Request, url: URL): Promise<Response> {
+      const input = readReferenceImageUploadParams(url);
+    const key = referenceImageUploadKey(input.boardId, input.itemId);
+    try {
+      const contentType = normalizeUploadContentType(request.headers.get("content-type"));
+      const bytes = new Uint8Array(await request.arrayBuffer());
+      const detected = detectImageBytes(bytes);
+      if (!detected || detected.mimeType !== contentType) {
+        throw new Error("Uploaded image must be a PNG, JPEG, or WebP file with a matching content type.");
+      }
+      const assetFilename = await this.writeReferenceImageAsset(session, input.itemId, detected.extension, bytes);
+      const board = await this.addReferenceImageAsset(session, {
+        ...input,
+        assetFilename,
+        mimeType: detected.mimeType,
+      });
+      const result: ReferenceImageUploadResult = { ok: true, board };
+      this.notifyReferenceImageUpload(session, key, result);
+      return Response.json({ ok: true, board });
+    } catch (error) {
+      const uploadError = error instanceof Error ? error : new Error("Reference image upload failed");
+      this.notifyReferenceImageUpload(session, key, { ok: false, error: uploadError });
+      return Response.json({ ok: false, error: uploadError.message }, { status: 400 });
+    }
+  }
+
   private async renderAndSaveReviewBoard(
     session: Session,
     board: ReviewBoard,
@@ -541,6 +802,26 @@ function parseClientEvent(message: string | Buffer): CompanionEvent | null {
   }
 }
 
+async function serveAsset(session: Session, pathname: string): Promise<Response> {
+  const assetName = decodeURIComponent(pathname.slice("/assets/".length));
+  if (basename(assetName) !== assetName || assetName.length === 0) {
+    return new Response("Not found", { status: 404 });
+  }
+  const assetPath = join(session.assetsDir, assetName);
+  try {
+    const mimeType = imageMimeTypeForPath(assetPath);
+    const file = await readFile(assetPath);
+    return new Response(file, {
+      headers: {
+        "content-type": mimeType,
+        "cache-control": "no-store",
+      },
+    });
+  } catch {
+    return new Response("Not found", { status: 404 });
+  }
+}
+
 function resolveDelivery(
   delivery: ShowScreenInput["delivery"],
   html: string,
@@ -558,11 +839,22 @@ function bodyHtml(html: string): string {
 }
 
 function normalizeReviewItem(item: ReviewItemInput, now: string): ReviewItem {
+  const kind = item.kind ?? (item.imagePath ? "image" : "html");
+  if (kind === "html" && item.html === undefined) {
+    throw new Error(`HTML review item requires html: ${item.id}`);
+  }
+  if (kind === "image" && (!item.imagePath || !item.imageMimeType)) {
+    throw new Error(`Image review item requires imagePath and imageMimeType: ${item.id}`);
+  }
   return {
     id: item.id,
     role: item.role,
     title: item.title,
+    kind,
     html: item.html,
+    imagePath: item.imagePath,
+    imageMimeType: item.imageMimeType,
+    imageAlt: item.imageAlt,
     version: item.version ?? 1,
     referenceType: item.referenceType,
     locked: item.locked ?? (item.role === "reference" && item.referenceType === "accepted"),
@@ -592,6 +884,21 @@ function assertUniqueReviewItems(items: ReviewItem[]): void {
 function assertMutableReviewItem(item: ReviewItem, action: "update" | "archive"): void {
   if (item.role === "reference" && item.locked) {
     throw new Error(`Locked reference review item cannot be ${action}d: ${item.id}`);
+  }
+}
+
+function assertReferenceItem(item: ReviewItem): void {
+  if (item.role !== "reference") {
+    throw new Error(`Review item is not a reference: ${item.id}`);
+  }
+}
+
+function assertDraftHtmlItem(item: ReviewItem): void {
+  if (item.role !== "draft") {
+    throw new Error(`Review item is not a draft: ${item.id}`);
+  }
+  if (item.kind === "image") {
+    throw new Error(`Image draft item cannot be updated with HTML: ${item.id}`);
   }
 }
 
@@ -638,6 +945,105 @@ function wireframeSummaryFilename(filename: string): string {
   return filename.endsWith(".html")
     ? `${filename.slice(0, -".html".length)}.wireframe-summary.json`
     : `${filename}.wireframe-summary.json`;
+}
+
+function imageMimeTypeForPath(path: string): "image/png" | "image/jpeg" | "image/webp" {
+  const extension = extname(path).toLowerCase();
+  if (extension === ".png") return "image/png";
+  if (extension === ".jpg" || extension === ".jpeg") return "image/jpeg";
+  if (extension === ".webp") return "image/webp";
+  throw new Error("imagePath must end with .png, .jpg, .jpeg, or .webp");
+}
+
+function referenceImageUploadKey(boardId: string, itemId: string): string {
+  return `${boardId}\0${itemId}`;
+}
+
+function readReferenceImageUploadParams(url: URL): {
+  boardId: string;
+  itemId: string;
+  title: string;
+  imageAlt?: string;
+  filename: string;
+} {
+  const boardId = readRequiredQuery(url, "boardId");
+  const itemId = readRequiredQuery(url, "itemId");
+  const title = readRequiredQuery(url, "title");
+  const imageAlt = url.searchParams.get("imageAlt") ?? undefined;
+  return {
+    boardId,
+    itemId,
+    title,
+    ...(imageAlt === undefined ? {} : { imageAlt }),
+    filename: url.searchParams.get("filename") ?? "review-board.html",
+  };
+}
+
+function readRequiredQuery(url: URL, name: string): string {
+  const value = url.searchParams.get(name);
+  if (!value) throw new Error(`Missing required upload parameter: ${name}`);
+  return value;
+}
+
+function normalizeUploadContentType(value: string | null): "image/png" | "image/jpeg" | "image/webp" {
+  const contentType = value?.split(";")[0]?.trim().toLowerCase();
+  if (contentType === "image/png" || contentType === "image/jpeg" || contentType === "image/webp") {
+    return contentType;
+  }
+  throw new Error("Uploaded image must use image/png, image/jpeg, or image/webp content type.");
+}
+
+function detectImageBytes(
+  bytes: Uint8Array,
+): { mimeType: "image/png"; extension: ".png" } | { mimeType: "image/jpeg"; extension: ".jpg" } | { mimeType: "image/webp"; extension: ".webp" } | null {
+  if (bytes.length === 0) throw new Error("Uploaded image is empty.");
+  if (bytes.byteLength > MAX_REFERENCE_IMAGE_BYTES) {
+    throw new Error("Uploaded image is too large. Use an image under 15 MB.");
+  }
+  if (
+    bytes.length >= 8 &&
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47 &&
+    bytes[4] === 0x0d &&
+    bytes[5] === 0x0a &&
+    bytes[6] === 0x1a &&
+    bytes[7] === 0x0a
+  ) {
+    return { mimeType: "image/png", extension: ".png" };
+  }
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return { mimeType: "image/jpeg", extension: ".jpg" };
+  }
+  if (
+    bytes.length >= 12 &&
+    asciiBytesEqual(bytes, 0, "RIFF") &&
+    asciiBytesEqual(bytes, 8, "WEBP")
+  ) {
+    return { mimeType: "image/webp", extension: ".webp" };
+  }
+  return null;
+}
+
+function asciiBytesEqual(bytes: Uint8Array, offset: number, value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    if (bytes[offset + index] !== value.charCodeAt(index)) return false;
+  }
+  return true;
+}
+
+async function assertReadableFile(path: string): Promise<void> {
+  const info = await stat(path);
+  if (!info.isFile()) throw new Error(`imagePath must point to a file: ${path}`);
+}
+
+function resolveLocalFile(path: string): string {
+  return isAbsolute(path) ? path : resolve(process.cwd(), path);
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error;
 }
 
 function createSessionId(): string {

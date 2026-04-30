@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { showChoiceGridInputSchema, showOptionsInputSchema } from "./schemas";
-import { renderChoiceGridTemplate, renderOptionsTemplate } from "./templates";
+import { requestReferenceImageInputSchema, showChoiceGridInputSchema, showOptionsInputSchema } from "./schemas";
+import {
+  renderChoiceGridTemplate,
+  renderOptionsTemplate,
+  renderReferenceImageRequestTemplate,
+  renderReviewBoardTemplate,
+} from "./templates";
 
 describe("templates", () => {
   test("escapes option text and attributes", () => {
@@ -52,5 +57,66 @@ describe("templates", () => {
     expect(html).toContain("Low &amp; dense");
     expect(html).toContain("&lt;Best&gt;");
     expect(html).not.toContain("<h3><Hero></h3>");
+  });
+
+  test("renders reference image paste and drop upload UI", () => {
+    const html = renderReferenceImageRequestTemplate(
+      requestReferenceImageInputSchema.parse({
+        sessionId: "session-a",
+        boardId: "board",
+        itemId: "current",
+        title: "<Current>",
+      }),
+    );
+
+    expect(html).toContain("Drop or paste a screenshot");
+    expect(html).toContain('accept="image/png,image/jpeg,image/webp"');
+    expect(html).toContain('fetch("/reference-image-upload?"');
+    expect(html).toContain("&lt;Current&gt;");
+    expect(html).not.toContain("<h2><Current></h2>");
+  });
+
+  test("renders drafts linked under their reference", () => {
+    const html = renderReviewBoardTemplate({
+      sessionId: "session-a",
+      boardId: "board",
+      acceptedItemIds: [],
+      screenVersion: 1,
+      updatedAt: "2026-04-30T00:00:00.000Z",
+      items: [
+        {
+          id: "current",
+          role: "reference",
+          referenceType: "current",
+          title: "Current",
+          kind: "html",
+          html: "<p>Current</p>",
+          version: 1,
+          locked: true,
+          archived: false,
+          temporary: false,
+          createdAt: "2026-04-30T00:00:00.000Z",
+          updatedAt: "2026-04-30T00:00:00.000Z",
+        },
+        {
+          id: "draft-a",
+          role: "draft",
+          title: "Draft A",
+          kind: "html",
+          html: "<p>Draft A</p>",
+          basedOnId: "current",
+          version: 1,
+          locked: false,
+          archived: false,
+          temporary: false,
+          createdAt: "2026-04-30T00:00:00.000Z",
+          updatedAt: "2026-04-30T00:00:00.000Z",
+        },
+      ],
+    });
+
+    expect(html).toContain('data-review-reference-group="current"');
+    expect(html).toContain("review-linked-drafts");
+    expect(html).toContain('data-review-item-id="draft-a"');
   });
 });

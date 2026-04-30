@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { appendFile, mkdir, mkdtemp, readFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { SessionManager } from "./session-manager";
@@ -126,6 +126,289 @@ describe("SessionManager wireframe summaries", () => {
 });
 
 describe("SessionManager review boards", () => {
+  test("imports an image as a locked current reference item", async () => {
+    const { manager, session } = await startTestSession();
+    const imagePath = await writeTestImage(session.workDir, "current.png");
+
+    const board = await manager.importReferenceImage({
+      sessionId: session.sessionId,
+      boardId: "expo",
+      itemId: "current-screen",
+      title: "Current Expo screen",
+      imagePath,
+    });
+    const rendered = await readFile(board.filePath!, "utf8");
+
+    expect(board.currentReferenceId).toBe("current-screen");
+    expect(board.items).toHaveLength(1);
+    expect(board.items[0]).toMatchObject({
+      id: "current-screen",
+      role: "reference",
+      referenceType: "current",
+      locked: true,
+      kind: "image",
+      imageMimeType: "image/png",
+      imageAlt: "Current Expo screen",
+    });
+    expect(board.items[0]?.imagePath).toBe("assets/current-screen.png");
+    expect(rendered).toContain('<img class="review-reference-image"');
+    expect(rendered).toContain('src="assets/current-screen.png"');
+  });
+
+  test("requests a pasted reference image and resolves when the browser uploads it", async () => {
+    const { manager, session } = await startTestSession();
+    const pending = manager.requestReferenceImage({
+      sessionId: session.sessionId,
+      boardId: "paste",
+      itemId: "current",
+      title: "Pasted screen",
+      timeoutMs: 1_000,
+    });
+    await sleep(10);
+
+    const response = await fetch(
+      `${session.url}/reference-image-upload?boardId=paste&itemId=current&title=Pasted%20screen&filename=review-board.html`,
+      {
+        method: "POST",
+        headers: { "content-type": "image/png" },
+        body: new Blob([pngArrayBuffer()], { type: "image/png" }),
+      },
+    );
+    const body = await response.json();
+    const board = await pending;
+
+    expect(response.ok).toBe(true);
+    expect(body.ok).toBe(true);
+    expect(board.timedOut).toBe(false);
+    expect(board.uploadScreenVersion).toBe(1);
+    expect(board.items?.find((item) => item.id === "current")).toMatchObject({
+      kind: "image",
+      locked: true,
+      imagePath: "assets/current.png",
+      imageMimeType: "image/png",
+    });
+  });
+
+  test("request reference image times out while leaving the upload screen visible", async () => {
+    const { manager, session } = await startTestSession();
+
+    const result = await manager.requestReferenceImage({
+      sessionId: session.sessionId,
+      boardId: "timeout",
+      itemId: "current",
+      title: "Waiting screen",
+      timeoutMs: 20,
+    });
+    const currentHtml = await fetch(session.url).then((response) => response.text());
+
+    expect(result).toEqual({
+      sessionId: session.sessionId,
+      boardId: "timeout",
+      timedOut: true,
+      uploadScreenVersion: 1,
+    });
+    expect(currentHtml).toContain("Drop or paste a screenshot");
+  });
+
+  test("reference image upload rejects unsupported or mismatched image payloads", async () => {
+    const { manager, session } = await startTestSession();
+
+    const response = await fetch(
+      `${session.url}/reference-image-upload?boardId=bad&itemId=current&title=Bad`,
+      {
+        method: "POST",
+        headers: { "content-type": "image/png" },
+        body: new Blob([invalidImageArrayBuffer()], { type: "image/png" }),
+      },
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.ok).toBe(false);
+    expect(body.error).toContain("PNG, JPEG, or WebP");
+  });
+
+  test("imports image references without replacing existing board items", async () => {
+    const { manager, session } = await startTestSession();
+    const imagePath = await writeTestImage(session.workDir, "current.jpg");
+    await manager.showReviewBoard({
+      sessionId: session.sessionId,
+      boardId: "expo-merge",
+      items: [{ id: "draft", role: "draft", title: "Draft", html: "<p>D</p>" }],
+    });
+
+    const board = await manager.importReferenceImage({
+      sessionId: session.sessionId,
+      boardId: "expo-merge",
+      itemId: "current",
+      title: "Current",
+      imagePath,
+    });
+
+    expect(board.items.map((item) => item.id)).toEqual(["draft", "current"]);
+    expect(board.items.find((item) => item.id === "current")?.imageMimeType).toBe("image/jpeg");
+    expect(board.items.find((item) => item.id === "draft")?.html).toBe("<p>D</p>");
+  });
+
+  test("rejects duplicate image reference ids and unsupported image paths", async () => {
+    const { manager, session } = await startTestSession();
+    const imagePath = await writeTestImage(session.workDir, "current.webp");
+    const textPath = join(session.workDir, "current.txt");
+    await writeFile(textPath, "not an image", "utf8");
+    await manager.importReferenceImage({
+      sessionId: session.sessionId,
+      boardId: "expo-errors",
+      itemId: "current",
+      title: "Current",
+      imagePath,
+    });
+
+    await expect(
+      manager.importReferenceImage({
+        sessionId: session.sessionId,
+        boardId: "expo-errors",
+        itemId: "current",
+        title: "Duplicate",
+        imagePath,
+      }),
+    ).rejects.toThrow("Review item already exists");
+    await expect(
+      manager.importReferenceImage({
+        sessionId: session.sessionId,
+        boardId: "expo-errors",
+        itemId: "text",
+        title: "Text",
+        imagePath: textPath,
+      }),
+    ).rejects.toThrow("imagePath must end with");
+  });
+
+  test("blocks updates and archives for locked image references", async () => {
+    const { manager, session } = await startTestSession();
+    const imagePath = await writeTestImage(session.workDir, "current.png");
+    await manager.importReferenceImage({
+      sessionId: session.sessionId,
+      boardId: "expo-locked",
+      itemId: "current",
+      title: "Current",
+      imagePath,
+    });
+
+    await expect(
+      manager.updateReviewItem({
+        sessionId: session.sessionId,
+        boardId: "expo-locked",
+        itemId: "current",
+        html: "<p>Changed</p>",
+      }),
+    ).rejects.toThrow("Locked reference review item cannot be updated");
+    await expect(
+      manager.archiveReviewItem({
+        sessionId: session.sessionId,
+        boardId: "expo-locked",
+        itemId: "current",
+      }),
+    ).rejects.toThrow("Locked reference review item cannot be archived");
+  });
+
+  test("adds and updates an HTML draft linked to a reference item", async () => {
+    const { manager, session } = await startTestSession();
+    const imagePath = await writeTestImage(session.workDir, "current.png");
+    await manager.importReferenceImage({
+      sessionId: session.sessionId,
+      boardId: "draft-flow",
+      itemId: "current",
+      title: "Current",
+      imagePath,
+    });
+
+    const added = await manager.addDraftForReference({
+      sessionId: session.sessionId,
+      boardId: "draft-flow",
+      referenceItemId: "current",
+      draftId: "draft-a",
+      title: "Draft A",
+      html: "<p>Draft one</p>",
+      changeSummary: "Initial draft",
+    });
+    const addedHtml = await readFile(added.filePath!, "utf8");
+
+    expect(added.items.map((item) => item.id)).toEqual(["current", "draft-a"]);
+    expect(added.items.find((item) => item.id === "draft-a")).toMatchObject({
+      role: "draft",
+      kind: "html",
+      basedOnId: "current",
+      html: "<p>Draft one</p>",
+    });
+    expect(addedHtml).toContain('data-review-reference-group="current"');
+    expect(addedHtml).toContain("review-linked-drafts");
+
+    const updated = await manager.updateDraftForReference({
+      sessionId: session.sessionId,
+      boardId: "draft-flow",
+      draftId: "draft-a",
+      html: "<p>Draft two</p>",
+      changeSummary: "Updated draft",
+    });
+
+    expect(updated.items.find((item) => item.id === "current")?.locked).toBe(true);
+    expect(updated.items.find((item) => item.id === "draft-a")).toMatchObject({
+      version: 2,
+      html: "<p>Draft two</p>",
+      changeSummary: "Updated draft",
+    });
+  });
+
+  test("draft-specific tools reject missing references, duplicate drafts, and non-draft updates", async () => {
+    const { manager, session } = await startTestSession();
+    await manager.showReviewBoard({
+      sessionId: session.sessionId,
+      boardId: "draft-errors",
+      items: [
+        { id: "reference", role: "reference", referenceType: "current", title: "Reference", html: "<p>R</p>" },
+        { id: "proposal", role: "proposal", title: "Proposal", html: "<p>P</p>" },
+        { id: "draft", role: "draft", title: "Draft", html: "<p>D</p>" },
+      ],
+    });
+
+    await expect(
+      manager.addDraftForReference({
+        sessionId: session.sessionId,
+        boardId: "draft-errors",
+        referenceItemId: "missing",
+        draftId: "draft-a",
+        title: "Draft A",
+        html: "<p>A</p>",
+      }),
+    ).rejects.toThrow("Unknown review item");
+    await expect(
+      manager.addDraftForReference({
+        sessionId: session.sessionId,
+        boardId: "draft-errors",
+        referenceItemId: "reference",
+        draftId: "draft",
+        title: "Duplicate",
+        html: "<p>Duplicate</p>",
+      }),
+    ).rejects.toThrow("Review item already exists");
+    await expect(
+      manager.updateDraftForReference({
+        sessionId: session.sessionId,
+        boardId: "draft-errors",
+        draftId: "reference",
+        html: "<p>Wrong</p>",
+      }),
+    ).rejects.toThrow("Review item is not a draft");
+    await expect(
+      manager.updateDraftForReference({
+        sessionId: session.sessionId,
+        boardId: "draft-errors",
+        draftId: "proposal",
+        html: "<p>Wrong</p>",
+      }),
+    ).rejects.toThrow("Review item is not a draft");
+  });
+
   test("updates one draft while preserving reference and accepted items", async () => {
     const { manager, session } = await startTestSession();
     const shown = await manager.showReviewBoard({
@@ -283,6 +566,24 @@ function wireframeSummary(): WireframeSummary {
     notes: ["Keep the structure low fidelity."],
     constraints: ["Do not encode visual design tokens."],
   };
+}
+
+async function writeTestImage(dir: string, name: string): Promise<string> {
+  const path = join(dir, name);
+  await writeFile(path, new Uint8Array(pngArrayBuffer()));
+  return path;
+}
+
+function pngArrayBuffer(): ArrayBuffer {
+  const buffer = new ArrayBuffer(8);
+  new Uint8Array(buffer).set([137, 80, 78, 71, 13, 10, 26, 10]);
+  return buffer;
+}
+
+function invalidImageArrayBuffer(): ArrayBuffer {
+  const buffer = new ArrayBuffer(4);
+  new Uint8Array(buffer).set([1, 2, 3, 4]);
+  return buffer;
 }
 
 function sleep(ms: number): Promise<void> {

@@ -6,13 +6,17 @@ import { SessionManager } from "./session-manager";
 import {
   DEFAULT_REQUESTED_SCHEMA,
   acceptReviewItemInputSchema,
+  addDraftForReferenceInputSchema,
   addReviewItemsInputSchema,
   archiveReviewItemInputSchema,
+  importReferenceImageInputSchema,
   readEventsInputSchema,
   readEventsOutputSchema,
   readCurrentWireframeSummaryInputSchema,
   readCurrentWireframeSummaryOutputSchema,
   readReviewBoardInputSchema,
+  requestReferenceImageInputSchema,
+  requestReferenceImageOutputSchema,
   requestUserInputOutputSchema,
   requestUserInputSchema,
   reviewBoardOutputSchema,
@@ -31,6 +35,7 @@ import {
   type RequestUserInput,
   type RequestUserInputOutput,
   updateReviewItemInputSchema,
+  updateDraftForReferenceInputSchema,
   waitForSelectionInputSchema,
   waitForSelectionOutputSchema,
 } from "./schemas";
@@ -195,6 +200,30 @@ export function createMcpServer(manager = new SessionManager()): McpServer {
   );
 
   server.registerTool(
+    "add_draft_for_reference",
+    {
+      title: "Add draft for reference",
+      description:
+        "Add one HTML draft linked to an existing Review Board reference item while preserving all references, accepted items, proposals, and other drafts.",
+      inputSchema: addDraftForReferenceInputSchema,
+      outputSchema: reviewBoardOutputSchema,
+    },
+    async (args) => toToolResult(await manager.addDraftForReference(args)),
+  );
+
+  server.registerTool(
+    "update_draft_for_reference",
+    {
+      title: "Update draft for reference",
+      description:
+        "Update one existing HTML draft item only. This tool refuses to update references, proposals, and image items.",
+      inputSchema: updateDraftForReferenceInputSchema,
+      outputSchema: reviewBoardOutputSchema,
+    },
+    async (args) => toToolResult(await manager.updateDraftForReference(args)),
+  );
+
+  server.registerTool(
     "add_review_items",
     {
       title: "Add review items",
@@ -228,6 +257,30 @@ export function createMcpServer(manager = new SessionManager()): McpServer {
       outputSchema: reviewBoardOutputSchema,
     },
     async (args) => toToolResult(await manager.archiveReviewItem(args)),
+  );
+
+  server.registerTool(
+    "import_reference_image",
+    {
+      title: "Import reference image",
+      description:
+        "Import a local PNG, JPEG, or WebP screenshot as a locked current reference item on a Review Board without replacing existing drafts or references.",
+      inputSchema: importReferenceImageInputSchema,
+      outputSchema: reviewBoardOutputSchema,
+    },
+    async (args) => toToolResult(await manager.importReferenceImage(args)),
+  );
+
+  server.registerTool(
+    "request_reference_image",
+    {
+      title: "Request reference image",
+      description:
+        "Show a paste/drop upload screen so the user can add any screenshot as a locked Review Board reference, regardless of whether it came from web, mobile, Expo, or a design tool.",
+      inputSchema: requestReferenceImageInputSchema,
+      outputSchema: requestReferenceImageOutputSchema,
+    },
+    async (args) => toToolResult(await manager.requestReferenceImage(args)),
   );
 
   server.registerTool(
@@ -791,7 +844,7 @@ For hidden, blocking, or sequential UI states, separate real behavior from revie
 
 When showing many draft variants in the browser, prefer vertical stacking or responsive wrapping by default so the review page scrolls vertically. Use horizontal scrolling only when the draft itself is intentionally demonstrating a horizontal-scroll interaction.
 
-When a review contains multiple screen drafts, accepted drafts, or a current implementation reference, use Review Board tools instead of replacing the browser with a one-off screen. Put current and accepted screens in \`reference\` items, active alternatives in \`draft\` items, and new ideas in \`proposal\` items. Later requests to change one specific screen should call \`update_review_item\` for that item id so references and other drafts remain visible.
+When a review contains multiple screen drafts, accepted drafts, or a current implementation reference, use Review Board tools instead of replacing the browser with a one-off screen. Put current and accepted screens in \`reference\` items, active alternatives in \`draft\` items, and new ideas in \`proposal\` items. Later requests to change one linked draft should call \`update_draft_for_reference\`; use \`update_review_item\` only for advanced board edits.
 
 Preferred workflow:
 
@@ -799,7 +852,7 @@ Preferred workflow:
 2. Call \`start_session\` to create a local browser session.
 3. Render the current screen baseline first when one exists, or a new draft based on nearby product patterns when it does not.
 4. If the screen includes overlays or multi-step flows, include a review view that expands the important states after the baseline unless the user only asked for exact runtime behavior.
-5. For multi-draft reviews, use \`show_review_board\`; for later edits use \`update_review_item\`, \`add_review_items\`, \`accept_review_item\`, or \`archive_review_item\`. For quick one-off choices, prefer \`show_choice_grid\`, \`show_options\`, \`show_cards\`, or \`show_comparison\`; use \`show_screen\` for custom HTML.
+5. For multi-draft reviews, use \`show_review_board\`; for any real current screen shown in web, mobile, Expo, native apps, or design tools, prefer \`request_reference_image\` so the user can paste or drop a screenshot as a locked baseline. Use \`import_reference_image\` when a local image path is already available. Add and revise HTML variants with \`add_draft_for_reference\` and \`update_draft_for_reference\`. For advanced edits use \`update_review_item\`, \`add_review_items\`, \`accept_review_item\`, or \`archive_review_item\`. For quick one-off choices, prefer \`show_choice_grid\`, \`show_options\`, \`show_cards\`, or \`show_comparison\`; use \`show_screen\` for custom HTML.
 6. Give the returned \`url\` to the user and name the source page/component or comparable patterns used.
 7. If the UI asks the user to choose, call \`wait_for_selection({ sinceScreenVersion })\` with the latest returned \`screenVersion\` or use \`read_events\`.
 8. Call \`stop_session\` when the review is done.
@@ -815,9 +868,13 @@ Tool names:
 - \`show_wireframe\`
 - \`show_review_board\`
 - \`update_review_item\`
+- \`add_draft_for_reference\`
+- \`update_draft_for_reference\`
 - \`add_review_items\`
 - \`accept_review_item\`
 - \`archive_review_item\`
+- \`import_reference_image\`
+- \`request_reference_image\`
 - \`read_review_board\`
 - \`read_events\`
 - \`wait_for_selection\`

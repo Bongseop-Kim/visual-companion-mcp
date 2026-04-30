@@ -48,12 +48,18 @@ export const showScreenOutputSchema = z.object({
 
 export const reviewItemRoleSchema = z.enum(["reference", "draft", "proposal"]);
 export const referenceTypeSchema = z.enum(["current", "accepted", "pinned"]);
+export const reviewItemKindSchema = z.enum(["html", "image"]);
+export const imageMimeTypeSchema = z.enum(["image/png", "image/jpeg", "image/webp"]);
 
 export const reviewItemInputSchema = z.object({
   id: z.string().min(1),
   role: reviewItemRoleSchema,
   title: z.string().min(1),
-  html: z.string(),
+  kind: reviewItemKindSchema.optional(),
+  html: z.string().optional(),
+  imagePath: z.string().optional(),
+  imageMimeType: imageMimeTypeSchema.optional(),
+  imageAlt: z.string().optional(),
   version: z.number().int().min(1).optional(),
   referenceType: referenceTypeSchema.optional(),
   locked: z.boolean().optional(),
@@ -102,6 +108,27 @@ export const updateReviewItemInputSchema = z.object({
   filename: z.string().min(1).default("review-board.html"),
 });
 
+export const addDraftForReferenceInputSchema = z.object({
+  sessionId: z.string().min(1),
+  boardId: z.string().min(1),
+  referenceItemId: z.string().min(1),
+  draftId: z.string().min(1),
+  title: z.string().min(1),
+  html: z.string(),
+  changeSummary: z.string().optional(),
+  filename: z.string().min(1).default("review-board.html"),
+});
+
+export const updateDraftForReferenceInputSchema = z.object({
+  sessionId: z.string().min(1),
+  boardId: z.string().min(1),
+  draftId: z.string().min(1),
+  html: z.string(),
+  title: z.string().min(1).optional(),
+  changeSummary: z.string().optional(),
+  filename: z.string().min(1).default("review-board.html"),
+});
+
 export const addReviewItemsInputSchema = z.object({
   sessionId: z.string().min(1),
   boardId: z.string().min(1),
@@ -118,9 +145,33 @@ export const acceptReviewItemInputSchema = z.object({
 
 export const archiveReviewItemInputSchema = acceptReviewItemInputSchema;
 
+export const importReferenceImageInputSchema = z.object({
+  sessionId: z.string().min(1),
+  boardId: z.string().min(1),
+  itemId: z.string().min(1),
+  title: z.string().min(1),
+  imagePath: z.string().min(1),
+  imageAlt: z.string().optional(),
+  filename: z.string().min(1).default("review-board.html"),
+});
+
+export const requestReferenceImageInputSchema = importReferenceImageInputSchema.omit({ imagePath: true }).extend({
+  timeoutMs: z.number().int().min(1).max(300_000).default(300_000),
+});
+
 export const readReviewBoardInputSchema = z.object({
   sessionId: z.string().min(1),
   boardId: z.string().min(1),
+});
+
+export const requestReferenceImageOutputSchema = reviewBoardSchema.partial().extend({
+  sessionId: z.string(),
+  boardId: z.string(),
+  timedOut: z.boolean(),
+  uploadScreenVersion: z.number().int().min(0),
+  filePath: z.string().optional(),
+  reloadedClients: z.number().optional(),
+  updatedClients: z.number().optional(),
 });
 
 export const reviewBoardOutputSchema = reviewBoardSchema.extend({
@@ -305,9 +356,14 @@ export type ReviewItem = z.infer<typeof reviewItemSchema>;
 export type ReviewBoard = z.infer<typeof reviewBoardSchema>;
 export type ShowReviewBoardInput = z.input<typeof showReviewBoardInputSchema>;
 export type UpdateReviewItemInput = z.input<typeof updateReviewItemInputSchema>;
+export type AddDraftForReferenceInput = z.input<typeof addDraftForReferenceInputSchema>;
+export type UpdateDraftForReferenceInput = z.input<typeof updateDraftForReferenceInputSchema>;
 export type AddReviewItemsInput = z.input<typeof addReviewItemsInputSchema>;
 export type AcceptReviewItemInput = z.input<typeof acceptReviewItemInputSchema>;
 export type ArchiveReviewItemInput = z.input<typeof archiveReviewItemInputSchema>;
+export type ImportReferenceImageInput = z.input<typeof importReferenceImageInputSchema>;
+export type RequestReferenceImageInput = z.input<typeof requestReferenceImageInputSchema>;
+export type RequestReferenceImageOutput = z.infer<typeof requestReferenceImageOutputSchema>;
 export type ReadReviewBoardInput = z.input<typeof readReviewBoardInputSchema>;
 export type ReviewBoardOutput = z.infer<typeof reviewBoardOutputSchema>;
 export type WireframeSummary = z.infer<typeof wireframeSummarySchema>;
