@@ -1,5 +1,7 @@
 # visual-companion-mcp
 
+[한국어](README.ko.md) | English
+
 `visual-companion-mcp` is a local MCP server that lets coding agents show interactive HTML screens in a user's browser and read the user's clicks back as structured events.
 
 It is designed for visual collaboration loops such as layout choices, wireframes, diagrams, and UI direction reviews.
