@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { appendFile, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { PNG } from "pngjs";
 import { SessionManager } from "./session-manager";
 import type { StartSessionOutput, WireframeSummary } from "./schemas";
 
@@ -321,6 +322,20 @@ describe("SessionManager review boards", () => {
       title: "Current",
       imagePath,
     });
+    await manager.attachReferenceContext({
+      sessionId: session.sessionId,
+      boardId: "draft-flow",
+      referenceItemId: "current",
+      referenceContext: {
+        sourceFiles: ["src/features/orders/order-screen.tsx"],
+        components: ["OrderCard"],
+        routes: ["/orders"],
+        styleSources: ["src/theme.ts"],
+        dataShapes: ["Order"],
+        states: ["ready"],
+        notes: ["Keep the existing card structure."],
+      },
+    });
 
     const added = await manager.addDraftForReference({
       sessionId: session.sessionId,
@@ -330,6 +345,8 @@ describe("SessionManager review boards", () => {
       title: "Draft A",
       html: "<p>Draft one</p>",
       changeSummary: "Initial draft",
+      reusedComponents: ["OrderCard"],
+      sourceContextSummary: "Uses the existing order card layout.",
     });
     const addedHtml = await readFile(added.filePath!, "utf8");
 
@@ -339,6 +356,8 @@ describe("SessionManager review boards", () => {
       kind: "html",
       basedOnId: "current",
       html: "<p>Draft one</p>",
+      reusedComponents: ["OrderCard"],
+      sourceContextSummary: "Uses the existing order card layout.",
     });
     expect(addedHtml).toContain('data-review-reference-group="current"');
     expect(addedHtml).toContain("review-linked-drafts");
@@ -349,6 +368,8 @@ describe("SessionManager review boards", () => {
       draftId: "draft-a",
       html: "<p>Draft two</p>",
       changeSummary: "Updated draft",
+      reusedComponents: ["OrderCard", "StatusTabs"],
+      sourceContextSummary: "Keeps the existing status tabs.",
     });
 
     expect(updated.items.find((item) => item.id === "current")?.locked).toBe(true);
@@ -356,7 +377,331 @@ describe("SessionManager review boards", () => {
       version: 2,
       html: "<p>Draft two</p>",
       changeSummary: "Updated draft",
+      reusedComponents: ["OrderCard", "StatusTabs"],
+      sourceContextSummary: "Keeps the existing status tabs.",
     });
+  });
+
+  test("attaches and reads implementation context for a reference item", async () => {
+    const { manager, session } = await startTestSession();
+    const imagePath = await writeTestImage(session.workDir, "current.png");
+    await manager.importReferenceImage({
+      sessionId: session.sessionId,
+      boardId: "context",
+      itemId: "current",
+      title: "Current",
+      imagePath,
+    });
+
+    const updated = await manager.attachReferenceContext({
+      sessionId: session.sessionId,
+      boardId: "context",
+      referenceItemId: "current",
+      referenceContext: {
+        sourceFiles: ["src/app/orders/page.tsx"],
+        components: ["OrderCard", "StatusTabs"],
+        routes: ["/orders"],
+        styleSources: ["src/theme.ts"],
+        dataShapes: ["Order"],
+        states: ["loading", "empty"],
+        notes: ["Reuse existing list spacing."],
+      },
+    });
+    const context = await manager.readReferenceContext({
+      sessionId: session.sessionId,
+      boardId: "context",
+      referenceItemId: "current",
+    });
+    const rendered = await readFile(updated.filePath!, "utf8");
+
+    expect(updated.items.find((item) => item.id === "current")?.referenceContext?.components).toEqual([
+      "OrderCard",
+      "StatusTabs",
+    ]);
+    expect(context.referenceContext?.sourceFiles).toEqual(["src/app/orders/page.tsx"]);
+    expect(rendered).toContain("OrderCard");
+    expect(rendered).toContain("src/app/orders/page.tsx");
+  });
+
+  test("requires useful implementation context before adding or updating linked drafts", async () => {
+    const { manager, session } = await startTestSession();
+    const imagePath = await writeTestImage(session.workDir, "current.png");
+    await manager.importReferenceImage({
+      sessionId: session.sessionId,
+      boardId: "required-context",
+      itemId: "current",
+      title: "Current",
+      imagePath,
+    });
+
+    await expect(
+      manager.addDraftForReference({
+        sessionId: session.sessionId,
+        boardId: "required-context",
+        referenceItemId: "current",
+        draftId: "draft-a",
+        title: "Draft A",
+        html: "<p>A</p>",
+        reusedComponents: ["OrderCard"],
+      }),
+    ).rejects.toThrow("Reference implementation context is required");
+
+    const allowed = await manager.addDraftForReference({
+      sessionId: session.sessionId,
+      boardId: "required-context",
+      referenceItemId: "current",
+      draftId: "draft-a",
+      title: "Draft A",
+      html: "<p>A</p>",
+      allowMissingContext: true,
+    });
+
+    expect(allowed.items.find((item) => item.id === "draft-a")?.basedOnId).toBe("current");
+    await expect(
+      manager.updateDraftForReference({
+        sessionId: session.sessionId,
+        boardId: "required-context",
+        draftId: "draft-a",
+        html: "<p>B</p>",
+      }),
+    ).rejects.toThrow("Reference implementation context is required");
+
+    await manager.attachReferenceContext({
+      sessionId: session.sessionId,
+      boardId: "required-context",
+      referenceItemId: "current",
+      referenceContext: {
+        sourceFiles: ["src/app/orders/page.tsx"],
+        components: ["OrderCard"],
+        routes: [],
+        styleSources: [],
+        dataShapes: [],
+        states: [],
+        notes: [],
+      },
+    });
+
+    await expect(
+      manager.updateDraftForReference({
+        sessionId: session.sessionId,
+        boardId: "required-context",
+        draftId: "draft-a",
+        html: "<p>C</p>",
+      }),
+    ).rejects.toThrow("Draft must record reusedComponents or sourceContextSummary");
+
+    const updated = await manager.updateDraftForReference({
+      sessionId: session.sessionId,
+      boardId: "required-context",
+      draftId: "draft-a",
+      html: "<p>C</p>",
+      sourceContextSummary: "Reuses the existing order page structure.",
+    });
+
+    expect(updated.items.find((item) => item.id === "draft-a")?.sourceContextSummary).toBe(
+      "Reuses the existing order page structure.",
+    );
+  });
+
+  test("rejects empty reference context", async () => {
+    const { manager, session } = await startTestSession();
+    const imagePath = await writeTestImage(session.workDir, "current.png");
+    await manager.importReferenceImage({
+      sessionId: session.sessionId,
+      boardId: "empty-reference-context",
+      itemId: "current",
+      title: "Current",
+      imagePath,
+    });
+
+    await expect(
+      manager.attachReferenceContext({
+        sessionId: session.sessionId,
+        boardId: "empty-reference-context",
+        referenceItemId: "current",
+        referenceContext: {
+          sourceFiles: [],
+          components: [],
+          routes: [],
+          styleSources: [],
+          dataShapes: [],
+          states: [],
+          notes: ["Screenshot only is not enough."],
+        },
+      }),
+    ).rejects.toThrow("Reference context must include");
+  });
+
+  test("attaches and reads project context for new page drafts", async () => {
+    const { manager, session } = await startTestSession();
+
+    const updated = await manager.attachProjectContext({
+      sessionId: session.sessionId,
+      boardId: "new-page",
+      contextId: "checkout-summary",
+      title: "Checkout summary context",
+      projectContext: {
+        sourceFiles: ["src/app/checkout/page.tsx"],
+        components: ["CheckoutShell", "OrderSummary"],
+        routes: ["/checkout"],
+        styleSources: ["src/components/ui/button.tsx"],
+        dataShapes: ["Cart"],
+        states: ["empty", "payment-pending"],
+        reusableFunctions: ["formatCurrency"],
+        notes: ["Build the draft from the existing checkout shell."],
+      },
+    });
+    const context = await manager.readProjectContext({
+      sessionId: session.sessionId,
+      boardId: "new-page",
+      contextId: "checkout-summary",
+    });
+    const rendered = await readFile(updated.filePath!, "utf8");
+
+    expect(updated.projectContexts?.[0]?.projectContext.components).toEqual(["CheckoutShell", "OrderSummary"]);
+    expect(context.projectContext?.projectContext.reusableFunctions).toEqual(["formatCurrency"]);
+    expect(rendered).toContain("Project Context");
+    expect(rendered).toContain("CheckoutShell");
+    expect(rendered).toContain("formatCurrency");
+
+    const revised = await manager.attachProjectContext({
+      sessionId: session.sessionId,
+      boardId: "new-page",
+      contextId: "checkout-summary",
+      title: "Checkout summary context revised",
+      projectContext: {
+        sourceFiles: ["src/app/checkout/page.tsx"],
+        components: ["CheckoutShell"],
+        routes: ["/checkout"],
+        styleSources: [],
+        dataShapes: [],
+        states: [],
+        reusableFunctions: [],
+        notes: [],
+      },
+    });
+
+    expect(revised.projectContexts?.[0]?.version).toBe(2);
+    expect(revised.projectContexts?.[0]?.title).toBe("Checkout summary context revised");
+  });
+
+  test("auto-analyzes project context from route files and attaches it to a reference and project context", async () => {
+    const { manager, session } = await startTestSession();
+    const projectRoot = await mkdtemp(join(tmpdir(), "visual-companion-project-"));
+    await mkdir(join(projectRoot, "app"), { recursive: true });
+    await mkdir(join(projectRoot, "components"), { recursive: true });
+    await writeFile(
+      join(projectRoot, "package.json"),
+      JSON.stringify({ dependencies: { "expo-router": "1.0.0", "react-native": "1.0.0" } }),
+      "utf8",
+    );
+    await writeFile(
+      join(projectRoot, "tsconfig.json"),
+      JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@/*": ["*"] } } }),
+      "utf8",
+    );
+    await writeFile(
+      join(projectRoot, "components", "OrderCard.tsx"),
+      "export function OrderCard() { return null; }\nexport function formatOrderStatus() { return 'ready'; }\n",
+      "utf8",
+    );
+    await writeFile(
+      join(projectRoot, "app", "orders.tsx"),
+      [
+        "import { View, Text, StyleSheet } from 'react-native';",
+        "import { OrderCard, formatOrderStatus } from '@/components/OrderCard';",
+        "type Order = { id: string };",
+        "export default function OrdersScreen() {",
+        "  const status = formatOrderStatus();",
+        "  return <View style={styles.container}><Text>{status}</Text><OrderCard /></View>;",
+        "}",
+        "const styles = StyleSheet.create({ container: { padding: 12 } });",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const imagePath = await writeTestImage(session.workDir, "current.png");
+    await manager.importReferenceImage({
+      sessionId: session.sessionId,
+      boardId: "auto-context",
+      itemId: "current",
+      title: "Current",
+      imagePath,
+    });
+
+    const analyzed = await manager.analyzeProjectContext({
+      sessionId: session.sessionId,
+      boardId: "auto-context",
+      targetRoute: "/orders",
+      referenceItemId: "current",
+      contextId: "orders",
+      projectRoot,
+    });
+    const rendered = await readFile(analyzed.filePath!, "utf8");
+
+    expect(analyzed.analysis.framework).toBe("expo-router");
+    expect(analyzed.referenceContext?.sourceFiles).toContain("app/orders.tsx");
+    expect(analyzed.referenceContext?.components).toContain("OrderCard");
+    expect(analyzed.projectContext?.projectContext.reusableFunctions).toContain("formatOrderStatus");
+    expect(rendered).toContain("Analyzed From");
+    expect(rendered).toContain("expo-router");
+    expect(rendered).toContain("OrderCard");
+  });
+
+  test("rejects empty project context", async () => {
+    const { manager, session } = await startTestSession();
+
+    await expect(
+      manager.attachProjectContext({
+        sessionId: session.sessionId,
+        boardId: "empty-project-context",
+        contextId: "new-screen",
+        title: "New screen",
+        projectContext: {
+          sourceFiles: [],
+          components: [],
+          routes: [],
+          styleSources: [],
+          dataShapes: [],
+          states: [],
+          reusableFunctions: [],
+          notes: ["Need actual implementation anchors."],
+        },
+      }),
+    ).rejects.toThrow("Project context must include");
+  });
+
+  test("context tools reject non-reference items and unknown references", async () => {
+    const { manager, session } = await startTestSession();
+    await manager.showReviewBoard({
+      sessionId: session.sessionId,
+      boardId: "context-errors",
+      items: [{ id: "draft", role: "draft", title: "Draft", html: "<p>D</p>" }],
+    });
+
+    await expect(
+      manager.attachReferenceContext({
+        sessionId: session.sessionId,
+        boardId: "context-errors",
+        referenceItemId: "draft",
+        referenceContext: {
+          sourceFiles: [],
+          components: [],
+          routes: [],
+          styleSources: [],
+          dataShapes: [],
+          states: [],
+          notes: [],
+        },
+      }),
+    ).rejects.toThrow("Review item is not a reference");
+    await expect(
+      manager.readReferenceContext({
+        sessionId: session.sessionId,
+        boardId: "context-errors",
+        referenceItemId: "missing",
+      }),
+    ).rejects.toThrow("Unknown review item");
   });
 
   test("draft-specific tools reject missing references, duplicate drafts, and non-draft updates", async () => {
@@ -407,6 +752,69 @@ describe("SessionManager review boards", () => {
         html: "<p>Wrong</p>",
       }),
     ).rejects.toThrow("Review item is not a draft");
+  });
+
+  test("validates a draft screenshot against a reference image and stores a diff report", async () => {
+    const { manager, session } = await startTestSession();
+    const referenceImage = await writePngImage(session.workDir, "reference.png", [
+      [255, 0, 0, 255],
+      [255, 0, 0, 255],
+      [255, 0, 0, 255],
+      [255, 0, 0, 255],
+    ]);
+    const draftImage = await writePngImage(session.workDir, "draft.png", [
+      [255, 0, 0, 255],
+      [0, 0, 255, 255],
+      [255, 0, 0, 255],
+      [255, 0, 0, 255],
+    ]);
+    await manager.importReferenceImage({
+      sessionId: session.sessionId,
+      boardId: "visual-validation",
+      itemId: "current",
+      title: "Current",
+      imagePath: referenceImage,
+    });
+    await manager.attachReferenceContext({
+      sessionId: session.sessionId,
+      boardId: "visual-validation",
+      referenceItemId: "current",
+      referenceContext: {
+        sourceFiles: ["src/app/orders/page.tsx"],
+        components: ["OrderCard"],
+        routes: ["/orders"],
+        styleSources: [],
+        dataShapes: [],
+        states: [],
+        notes: [],
+      },
+    });
+    await manager.addDraftForReference({
+      sessionId: session.sessionId,
+      boardId: "visual-validation",
+      referenceItemId: "current",
+      draftId: "draft-a",
+      title: "Draft A",
+      html: "<p>Draft</p>",
+      reusedComponents: ["OrderCard"],
+    });
+
+    const result = await manager.validateDraftAgainstReference({
+      sessionId: session.sessionId,
+      boardId: "visual-validation",
+      referenceItemId: "current",
+      draftItemId: "draft-a",
+      draftImagePath: draftImage,
+      maxDiffRatio: 0.1,
+    });
+    const rendered = await readFile(result.filePath!, "utf8");
+
+    expect(result.report.status).toBe("failed");
+    expect(result.report.diffPixels).toBeGreaterThan(0);
+    expect(result.report.diffImagePath).toStartWith("assets/");
+    expect(result.report.dimensionMismatch).toBe(false);
+    expect(rendered).toContain("Validation");
+    expect(rendered).toContain("Visual diff");
   });
 
   test("updates one draft while preserving reference and accepted items", async () => {
@@ -571,6 +979,19 @@ function wireframeSummary(): WireframeSummary {
 async function writeTestImage(dir: string, name: string): Promise<string> {
   const path = join(dir, name);
   await writeFile(path, new Uint8Array(pngArrayBuffer()));
+  return path;
+}
+
+async function writePngImage(dir: string, name: string, pixels: number[][]): Promise<string> {
+  const path = join(dir, name);
+  const png = new PNG({ width: 2, height: 2 });
+  pixels.forEach((pixel, index) => {
+    png.data[index * 4] = pixel[0] ?? 0;
+    png.data[index * 4 + 1] = pixel[1] ?? 0;
+    png.data[index * 4 + 2] = pixel[2] ?? 0;
+    png.data[index * 4 + 3] = pixel[3] ?? 255;
+  });
+  await writeFile(path, PNG.sync.write(png));
   return path;
 }
 

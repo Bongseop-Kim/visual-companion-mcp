@@ -50,6 +50,78 @@ export const reviewItemRoleSchema = z.enum(["reference", "draft", "proposal"]);
 export const referenceTypeSchema = z.enum(["current", "accepted", "pinned"]);
 export const reviewItemKindSchema = z.enum(["html", "image"]);
 export const imageMimeTypeSchema = z.enum(["image/png", "image/jpeg", "image/webp"]);
+export const referenceContextSchema = z.object({
+  sourceFiles: z.array(z.string()).default([]),
+  components: z.array(z.string()).default([]),
+  routes: z.array(z.string()).default([]),
+  styleSources: z.array(z.string()).default([]),
+  dataShapes: z.array(z.string()).default([]),
+  states: z.array(z.string()).default([]),
+  notes: z.array(z.string()).default([]),
+});
+
+export const projectContextSchema = referenceContextSchema.extend({
+  reusableFunctions: z.array(z.string()).default([]),
+});
+
+export const projectContextRecordSchema = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1),
+  projectContext: projectContextSchema,
+  version: z.number().int().min(1),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+export const analysisFrameworkSchema = z.enum([
+  "next-app",
+  "next-pages",
+  "expo-router",
+  "react-native",
+  "react",
+  "unknown",
+]);
+
+export const analysisImportSchema = z.object({
+  sourceFile: z.string(),
+  moduleSpecifier: z.string(),
+  importedNames: z.array(z.string()).default([]),
+  kind: z.enum(["local", "package", "alias"]),
+});
+
+export const analysisReportSchema = z.object({
+  framework: analysisFrameworkSchema,
+  targetFiles: z.array(z.string()).default([]),
+  componentTree: z.array(z.string()).default([]),
+  imports: z.array(analysisImportSchema).default([]),
+  referenceContext: referenceContextSchema,
+  projectContext: projectContextSchema,
+  warnings: z.array(z.string()).default([]),
+  confidence: z.number().min(0).max(1),
+  createdAt: z.string(),
+});
+
+export const visualValidationStatusSchema = z.enum(["passed", "warning", "failed"]);
+
+export const visualValidationReportSchema = z.object({
+  id: z.string().min(1),
+  referenceItemId: z.string().min(1),
+  draftItemId: z.string().min(1),
+  status: visualValidationStatusSchema,
+  threshold: z.number().min(0).max(1),
+  maxDiffRatio: z.number().min(0).max(1),
+  diffPixels: z.number().int().min(0),
+  totalPixels: z.number().int().min(0),
+  diffRatio: z.number().min(0),
+  width: z.number().int().min(0),
+  height: z.number().int().min(0),
+  dimensionMismatch: z.boolean().default(false),
+  referenceImagePath: z.string(),
+  draftImagePath: z.string(),
+  diffImagePath: z.string().optional(),
+  warnings: z.array(z.string()).default([]),
+  createdAt: z.string(),
+});
 
 export const reviewItemInputSchema = z.object({
   id: z.string().min(1),
@@ -67,6 +139,11 @@ export const reviewItemInputSchema = z.object({
   temporary: z.boolean().optional(),
   basedOnId: z.string().min(1).optional(),
   changeSummary: z.string().optional(),
+  referenceContext: referenceContextSchema.optional(),
+  reusedComponents: z.array(z.string()).optional(),
+  sourceContextSummary: z.string().optional(),
+  analysisReport: analysisReportSchema.optional(),
+  validationReports: z.array(visualValidationReportSchema).default([]).optional(),
 });
 
 export const reviewItemSchema = reviewItemInputSchema.extend({
@@ -84,6 +161,7 @@ export const reviewBoardSchema = z.object({
   title: z.string().optional(),
   currentReferenceId: z.string().min(1).optional(),
   acceptedItemIds: z.array(z.string()).default([]),
+  projectContexts: z.array(projectContextRecordSchema).default([]),
   items: z.array(reviewItemSchema).default([]),
   screenVersion: z.number().int().min(0),
   updatedAt: z.string(),
@@ -116,6 +194,9 @@ export const addDraftForReferenceInputSchema = z.object({
   title: z.string().min(1),
   html: z.string(),
   changeSummary: z.string().optional(),
+  reusedComponents: z.array(z.string()).optional(),
+  sourceContextSummary: z.string().optional(),
+  allowMissingContext: z.boolean().default(false),
   filename: z.string().min(1).default("review-board.html"),
 });
 
@@ -126,6 +207,9 @@ export const updateDraftForReferenceInputSchema = z.object({
   html: z.string(),
   title: z.string().min(1).optional(),
   changeSummary: z.string().optional(),
+  reusedComponents: z.array(z.string()).optional(),
+  sourceContextSummary: z.string().optional(),
+  allowMissingContext: z.boolean().default(false),
   filename: z.string().min(1).default("review-board.html"),
 });
 
@@ -159,9 +243,99 @@ export const requestReferenceImageInputSchema = importReferenceImageInputSchema.
   timeoutMs: z.number().int().min(1).max(300_000).default(300_000),
 });
 
+export const attachReferenceContextInputSchema = z.object({
+  sessionId: z.string().min(1),
+  boardId: z.string().min(1),
+  referenceItemId: z.string().min(1),
+  referenceContext: referenceContextSchema,
+  filename: z.string().min(1).default("review-board.html"),
+});
+
+export const readReferenceContextInputSchema = z.object({
+  sessionId: z.string().min(1),
+  boardId: z.string().min(1),
+  referenceItemId: z.string().min(1),
+});
+
+export const attachProjectContextInputSchema = z.object({
+  sessionId: z.string().min(1),
+  boardId: z.string().min(1),
+  contextId: z.string().min(1),
+  title: z.string().min(1),
+  projectContext: projectContextSchema,
+  filename: z.string().min(1).default("review-board.html"),
+});
+
+export const readProjectContextInputSchema = z.object({
+  sessionId: z.string().min(1),
+  boardId: z.string().min(1),
+  contextId: z.string().min(1),
+});
+
 export const readReviewBoardInputSchema = z.object({
   sessionId: z.string().min(1),
   boardId: z.string().min(1),
+});
+
+export const readReferenceContextOutputSchema = z.object({
+  sessionId: z.string(),
+  boardId: z.string(),
+  referenceItemId: z.string(),
+  referenceContext: referenceContextSchema.optional(),
+});
+
+export const readProjectContextOutputSchema = z.object({
+  sessionId: z.string(),
+  boardId: z.string(),
+  contextId: z.string(),
+  projectContext: projectContextRecordSchema.optional(),
+});
+
+export const analyzeProjectContextInputSchema = z.object({
+  sessionId: z.string().min(1),
+  boardId: z.string().min(1),
+  targetPath: z.string().min(1).optional(),
+  targetRoute: z.string().min(1).optional(),
+  referenceItemId: z.string().min(1).optional(),
+  contextId: z.string().min(1).optional(),
+  title: z.string().min(1).optional(),
+  projectRoot: z.string().min(1).optional(),
+  maxFiles: z.number().int().min(1).max(500).default(80),
+  filename: z.string().min(1).default("review-board.html"),
+});
+
+export const analyzeProjectContextOutputSchema = z.object({
+  sessionId: z.string(),
+  boardId: z.string(),
+  analysis: analysisReportSchema,
+  referenceContext: referenceContextSchema.optional(),
+  projectContext: projectContextRecordSchema.optional(),
+  filePath: z.string().optional(),
+  reloadedClients: z.number().optional(),
+  updatedClients: z.number().optional(),
+  screenVersion: z.number().int().min(0).optional(),
+});
+
+export const validateDraftAgainstReferenceInputSchema = z.object({
+  sessionId: z.string().min(1),
+  boardId: z.string().min(1),
+  referenceItemId: z.string().min(1),
+  draftItemId: z.string().min(1),
+  draftImagePath: z.string().min(1).optional(),
+  referenceImagePath: z.string().min(1).optional(),
+  threshold: z.number().min(0).max(1).default(0.1),
+  maxDiffRatio: z.number().min(0).max(1).default(0.08),
+  filename: z.string().min(1).default("review-board.html"),
+});
+
+export const validateDraftAgainstReferenceOutputSchema = z.object({
+  sessionId: z.string(),
+  boardId: z.string(),
+  report: visualValidationReportSchema,
+  filePath: z.string().optional(),
+  reloadedClients: z.number().optional(),
+  updatedClients: z.number().optional(),
+  screenVersion: z.number().int().min(0).optional(),
 });
 
 export const requestReferenceImageOutputSchema = reviewBoardSchema.partial().extend({
@@ -353,11 +527,25 @@ export type ShowScreenInput = z.input<typeof showScreenInputSchema>;
 export type ShowScreenOutput = z.infer<typeof showScreenOutputSchema>;
 export type ReviewItemInput = z.input<typeof reviewItemInputSchema>;
 export type ReviewItem = z.infer<typeof reviewItemSchema>;
+export type AnalysisReport = z.infer<typeof analysisReportSchema>;
+export type VisualValidationReport = z.infer<typeof visualValidationReportSchema>;
+export type ProjectContext = z.infer<typeof projectContextSchema>;
+export type ProjectContextRecord = z.infer<typeof projectContextRecordSchema>;
 export type ReviewBoard = z.infer<typeof reviewBoardSchema>;
 export type ShowReviewBoardInput = z.input<typeof showReviewBoardInputSchema>;
 export type UpdateReviewItemInput = z.input<typeof updateReviewItemInputSchema>;
 export type AddDraftForReferenceInput = z.input<typeof addDraftForReferenceInputSchema>;
 export type UpdateDraftForReferenceInput = z.input<typeof updateDraftForReferenceInputSchema>;
+export type AttachReferenceContextInput = z.input<typeof attachReferenceContextInputSchema>;
+export type ReadReferenceContextInput = z.input<typeof readReferenceContextInputSchema>;
+export type ReadReferenceContextOutput = z.infer<typeof readReferenceContextOutputSchema>;
+export type AttachProjectContextInput = z.input<typeof attachProjectContextInputSchema>;
+export type ReadProjectContextInput = z.input<typeof readProjectContextInputSchema>;
+export type ReadProjectContextOutput = z.infer<typeof readProjectContextOutputSchema>;
+export type AnalyzeProjectContextInput = z.input<typeof analyzeProjectContextInputSchema>;
+export type AnalyzeProjectContextOutput = z.infer<typeof analyzeProjectContextOutputSchema>;
+export type ValidateDraftAgainstReferenceInput = z.input<typeof validateDraftAgainstReferenceInputSchema>;
+export type ValidateDraftAgainstReferenceOutput = z.infer<typeof validateDraftAgainstReferenceOutputSchema>;
 export type AddReviewItemsInput = z.input<typeof addReviewItemsInputSchema>;
 export type AcceptReviewItemInput = z.input<typeof acceptReviewItemInputSchema>;
 export type ArchiveReviewItemInput = z.input<typeof archiveReviewItemInputSchema>;

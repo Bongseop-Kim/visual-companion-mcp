@@ -81,6 +81,25 @@ describe("templates", () => {
       sessionId: "session-a",
       boardId: "board",
       acceptedItemIds: [],
+      projectContexts: [
+        {
+          id: "orders-context",
+          title: "Orders implementation context",
+          projectContext: {
+            sourceFiles: ["src/app/orders/page.tsx"],
+            components: ["OrderCard"],
+            routes: ["/orders"],
+            styleSources: ["src/theme.ts"],
+            dataShapes: ["Order"],
+            states: ["empty"],
+            reusableFunctions: ["formatOrderStatus"],
+            notes: ["Use existing filters."],
+          },
+          version: 1,
+          createdAt: "2026-04-30T00:00:00.000Z",
+          updatedAt: "2026-04-30T00:00:00.000Z",
+        },
+      ],
       screenVersion: 1,
       updatedAt: "2026-04-30T00:00:00.000Z",
       items: [
@@ -91,6 +110,15 @@ describe("templates", () => {
           title: "Current",
           kind: "html",
           html: "<p>Current</p>",
+          referenceContext: {
+            sourceFiles: ["src/app/orders/page.tsx"],
+            components: ["OrderCard"],
+            routes: ["/orders"],
+            styleSources: ["src/theme.ts"],
+            dataShapes: ["Order"],
+            states: ["empty"],
+            notes: ["Reuse list spacing."],
+          },
           version: 1,
           locked: true,
           archived: false,
@@ -105,6 +133,8 @@ describe("templates", () => {
           kind: "html",
           html: "<p>Draft A</p>",
           basedOnId: "current",
+          reusedComponents: ["OrderCard"],
+          sourceContextSummary: "Keeps the existing card structure.",
           version: 1,
           locked: false,
           archived: false,
@@ -117,6 +147,11 @@ describe("templates", () => {
 
     expect(html).toContain('data-review-reference-group="current"');
     expect(html).toContain("review-linked-drafts");
+    expect(html).toContain("Project Context");
+    expect(html).toContain("formatOrderStatus");
     expect(html).toContain('data-review-item-id="draft-a"');
+    expect(html).toContain("src/app/orders/page.tsx");
+    expect(html).toContain("OrderCard");
+    expect(html).toContain("Keeps the existing card structure.");
   });
 });

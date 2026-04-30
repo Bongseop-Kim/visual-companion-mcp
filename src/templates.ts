@@ -1,10 +1,13 @@
 import { escapeHtml, escapeHtmlAttribute } from "./frame";
 import {
   DEFAULT_REQUESTED_SCHEMA,
+  type AnalysisReport,
+  type ProjectContextRecord,
   type RequestUserInput,
   type RequestReferenceImageInput,
   type ReviewBoard,
   type ReviewItem,
+  type VisualValidationReport,
   type ShowCardsInput,
   type ShowChoiceGridInput,
   type ShowComparisonInput,
@@ -97,6 +100,7 @@ export function renderWireframeTemplate(input: ShowWireframeInput): string {
 
 export function renderReviewBoardTemplate(board: ReviewBoard): string {
   const visibleItems = board.items.filter((item) => !item.archived);
+  const projectContexts = board.projectContexts ?? [];
   const references = visibleItems.filter((item) => item.role === "reference");
   const referenceIds = new Set(references.map((item) => item.id));
   const linkedDrafts = visibleItems.filter((item) => item.role === "draft" && item.basedOnId && referenceIds.has(item.basedOnId));
@@ -119,15 +123,26 @@ export function renderReviewBoardTemplate(board: ReviewBoard): string {
 .review-item-meta { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
 .review-badge { border: 1px solid #d0d5dd; border-radius: 999px; padding: 2px 7px; color: #475467; font-size: 11px; font-weight: 700; background: #fff; }
 .review-badge.locked { border-color: #fedf89; color: #93370d; background: #fffbeb; }
+.review-badge.passed { border-color: #abefc6; color: #067647; background: #ecfdf3; }
+.review-badge.warning { border-color: #fedf89; color: #93370d; background: #fffaeb; }
+.review-badge.failed { border-color: #fecdca; color: #b42318; background: #fef3f2; }
 .review-item-body { padding: 12px; }
 .review-reference-image {
   display: block; width: 100%; max-width: 100%; height: auto;
   border: 1px solid #e6e9f1; border-radius: 6px; background: #f8fafc;
 }
+.review-context { display: grid; gap: 8px; margin-top: 12px; padding-top: 10px; border-top: 1px solid #eef1f6; }
+.review-context-row { display: grid; gap: 4px; }
+.review-context-label { color: #667085; font-size: 11px; font-weight: 800; text-transform: uppercase; }
+.review-context-list { display: flex; flex-wrap: wrap; gap: 5px; }
+.review-context-chip { border: 1px solid #d0d5dd; border-radius: 999px; padding: 2px 7px; color: #344054; background: #fff; font-size: 11px; font-weight: 700; }
+.review-context-note { margin: 0; color: #475467; font-size: 12px; line-height: 1.45; }
+.review-validation-image { display: block; width: 100%; max-width: 260px; height: auto; border: 1px solid #e6e9f1; border-radius: 6px; background: #f8fafc; }
 .review-change-summary { margin: 0; padding: 8px 12px 10px; border-top: 1px solid #eef1f6; color: #667085; font-size: 13px; }
 </style>
 ${renderHeading(board.title ?? "Review Board", `Board ${board.boardId}`)}
 <div class="review-board" data-review-board-id="${escapeHtmlAttribute(board.boardId)}">
+  ${renderProjectContextSection(projectContexts)}
   ${renderReferenceSection(references, linkedDrafts)}
   ${renderReviewSection("Draft", drafts)}
   ${renderReviewSection("Proposal", proposals)}
@@ -318,6 +333,40 @@ function renderReferenceSection(references: ReviewItem[], linkedDrafts: ReviewIt
   </section>`;
 }
 
+function renderProjectContextSection(projectContexts: ProjectContextRecord[]): string {
+  if (projectContexts.length === 0) return "";
+  return `<section class="review-board-section" data-review-section="project-context">
+    <div class="review-board-heading">
+      <h3>Project Context</h3>
+      <span class="review-board-count">${projectContexts.length}</span>
+    </div>
+    <div class="review-board-grid">
+      ${projectContexts.map(renderProjectContext).join("\n")}
+    </div>
+  </section>`;
+}
+
+function renderProjectContext(record: ProjectContextRecord): string {
+  return `<article class="review-item" data-project-context-id="${escapeHtmlAttribute(record.id)}">
+    <div class="review-item-header">
+      <div class="review-item-title">${escapeHtml(record.title)}</div>
+      <div class="review-item-meta"><span class="review-badge">v${record.version}</span></div>
+    </div>
+    <div class="review-item-body">
+      <div class="review-context">
+        ${renderContextRow("Files", record.projectContext.sourceFiles)}
+        ${renderContextRow("Components", record.projectContext.components)}
+        ${renderContextRow("Routes", record.projectContext.routes)}
+        ${renderContextRow("Styles", record.projectContext.styleSources)}
+        ${renderContextRow("Data", record.projectContext.dataShapes)}
+        ${renderContextRow("States", record.projectContext.states)}
+        ${renderContextRow("Functions", record.projectContext.reusableFunctions)}
+        ${renderContextNotes(record.projectContext.notes)}
+      </div>
+    </div>
+  </article>`;
+}
+
 function renderReferenceGroup(reference: ReviewItem, linkedDrafts: ReviewItem[]): string {
   const drafts = linkedDrafts.filter((item) => item.basedOnId === reference.id);
   return `<div class="review-reference-group" data-review-reference-group="${escapeHtmlAttribute(reference.id)}">
@@ -341,7 +390,7 @@ function renderReviewItem(item: ReviewItem): string {
         ${badges.map((badge) => `<span class="review-badge${badge === "locked" ? " locked" : ""}">${escapeHtml(String(badge))}</span>`).join("")}
       </div>
     </div>
-    <div class="review-item-body">${renderReviewItemBody(item)}</div>
+    <div class="review-item-body">${renderReviewItemBody(item)}${renderReviewItemContext(item)}</div>
     ${item.changeSummary ? `<p class="review-change-summary">${escapeHtml(item.changeSummary)}</p>` : ""}
   </article>`;
 }
@@ -353,6 +402,73 @@ function renderReviewItemBody(item: ReviewItem): string {
     return `<img class="review-reference-image" src="${escapeHtmlAttribute(item.imagePath)}" alt="${escapeHtmlAttribute(alt)}">`;
   }
   return item.html ?? "";
+}
+
+function renderReviewItemContext(item: ReviewItem): string {
+  const analysis = item.analysisReport ? renderAnalysisReport(item.analysisReport) : "";
+  const validations = item.validationReports?.length ? renderValidationReports(item.validationReports) : "";
+  if (item.role === "reference" && item.referenceContext) {
+    return `<div class="review-context">
+      ${renderContextRow("Files", item.referenceContext.sourceFiles)}
+      ${renderContextRow("Components", item.referenceContext.components)}
+      ${renderContextRow("Routes", item.referenceContext.routes)}
+      ${renderContextRow("Styles", item.referenceContext.styleSources)}
+      ${renderContextRow("Data", item.referenceContext.dataShapes)}
+      ${renderContextRow("States", item.referenceContext.states)}
+      ${renderContextNotes(item.referenceContext.notes)}
+      ${analysis}
+      ${validations}
+    </div>`;
+  }
+  if (item.role === "draft" && (item.reusedComponents?.length || item.sourceContextSummary || validations)) {
+    return `<div class="review-context">
+      ${renderContextRow("Reused", item.reusedComponents ?? [])}
+      ${item.sourceContextSummary ? `<p class="review-context-note">${escapeHtml(item.sourceContextSummary)}</p>` : ""}
+      ${analysis}
+      ${validations}
+    </div>`;
+  }
+  return analysis || validations ? `<div class="review-context">${analysis}${validations}</div>` : "";
+}
+
+function renderAnalysisReport(report: AnalysisReport): string {
+  return `<div class="review-context-row">
+    <div class="review-context-label">Analyzed From</div>
+    <div class="review-context-list">
+      <span class="review-context-chip">${escapeHtml(report.framework)}</span>
+      <span class="review-context-chip">confidence ${escapeHtml(String(report.confidence))}</span>
+    </div>
+    ${renderContextRow("Targets", report.targetFiles)}
+    ${renderContextRow("Tree", report.componentTree.slice(0, 16))}
+    ${renderContextNotes(report.warnings)}
+  </div>`;
+}
+
+function renderValidationReports(reports: VisualValidationReport[]): string {
+  return reports.map((report) => `<div class="review-context-row">
+    <div class="review-context-label">Validation</div>
+    <div class="review-context-list">
+      <span class="review-badge ${escapeHtmlAttribute(report.status)}">${escapeHtml(report.status)}</span>
+      <span class="review-context-chip">diff ${(report.diffRatio * 100).toFixed(2)}%</span>
+      <span class="review-context-chip">${report.diffPixels}/${report.totalPixels} px</span>
+    </div>
+    ${report.dimensionMismatch ? `<p class="review-context-note">Dimension mismatch.</p>` : ""}
+    ${report.diffImagePath ? `<img class="review-validation-image" src="${escapeHtmlAttribute(report.diffImagePath)}" alt="Visual diff">` : ""}
+    ${renderContextNotes(report.warnings)}
+  </div>`).join("");
+}
+
+function renderContextRow(label: string, values: string[]): string {
+  if (values.length === 0) return "";
+  return `<div class="review-context-row">
+    <div class="review-context-label">${escapeHtml(label)}</div>
+    <div class="review-context-list">${values.map((value) => `<span class="review-context-chip">${escapeHtml(value)}</span>`).join("")}</div>
+  </div>`;
+}
+
+function renderContextNotes(notes: string[]): string {
+  if (notes.length === 0) return "";
+  return notes.map((note) => `<p class="review-context-note">${escapeHtml(note)}</p>`).join("");
 }
 
 function renderOption(

@@ -4,21 +4,34 @@ import { homedir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { appendEvent, readEvents } from "./events";
 import { isFullHtmlDocument, renderScreenHtml } from "./frame";
+import { analyzeProject } from "./project-analyzer";
 import { renderReferenceImageRequestTemplate, renderReviewBoardTemplate } from "./templates";
+import { validateImages } from "./visual-validator";
 import {
   reviewBoardSchema,
+  analysisReportSchema,
   eventSchema,
+  visualValidationReportSchema,
   wireframeSummarySchema,
   startSessionInputSchema,
   requestReferenceImageInputSchema,
   type AcceptReviewItemInput,
   type AddDraftForReferenceInput,
   type AddReviewItemsInput,
+  type AnalyzeProjectContextInput,
+  type AnalyzeProjectContextOutput,
   type ArchiveReviewItemInput,
+  type AttachProjectContextInput,
+  type AttachReferenceContextInput,
   type CompanionEvent,
   type ImportReferenceImageInput,
+  type ProjectContext,
   type RequestReferenceImageInput,
   type RequestReferenceImageOutput,
+  type ReadProjectContextInput,
+  type ReadProjectContextOutput,
+  type ReadReferenceContextInput,
+  type ReadReferenceContextOutput,
   type ReadReviewBoardInput,
   type ReadCurrentWireframeSummaryOutput,
   type ReviewBoard,
@@ -32,6 +45,8 @@ import {
   type StartSessionOutput,
   type UpdateReviewItemInput,
   type UpdateDraftForReferenceInput,
+  type ValidateDraftAgainstReferenceInput,
+  type ValidateDraftAgainstReferenceOutput,
   type WaitForSelectionInput,
   type WaitForSelectionOutput,
   type WireframeSummary,
@@ -271,6 +286,7 @@ export class SessionManager {
       title: input.title,
       currentReferenceId: input.currentReferenceId,
       acceptedItemIds: [],
+      projectContexts: [],
       items: input.items.map((item) => normalizeReviewItem(item, now)),
       screenVersion: session.screenVersion,
       updatedAt: now,
@@ -309,6 +325,12 @@ export class SessionManager {
     if (board.items.some((item) => item.id === input.draftId)) {
       throw new Error(`Review item already exists: ${input.draftId}`);
     }
+    assertReferenceHasImplementationContext(reference, input.allowMissingContext ?? false);
+    assertDraftMentionsImplementationContext(
+      input.reusedComponents,
+      input.sourceContextSummary,
+      input.allowMissingContext ?? false,
+    );
 
     const now = new Date().toISOString();
     board.items.push(
@@ -321,6 +343,8 @@ export class SessionManager {
           html: input.html,
           basedOnId: input.referenceItemId,
           changeSummary: input.changeSummary,
+          reusedComponents: input.reusedComponents,
+          sourceContextSummary: input.sourceContextSummary,
         },
         now,
       ),
@@ -335,14 +359,241 @@ export class SessionManager {
     const board = await this.loadReviewBoard(session, input.boardId);
     const item = findReviewItem(board, input.draftId);
     assertDraftHtmlItem(item);
+    if (!(input.allowMissingContext ?? false)) {
+      if (!item.basedOnId) {
+        throw new Error(`Draft item is not linked to a reference: ${item.id}`);
+      }
+      const reference = findReviewItem(board, item.basedOnId);
+      assertReferenceItem(reference);
+      assertReferenceHasImplementationContext(reference, false);
+      assertDraftMentionsImplementationContext(
+        input.reusedComponents ?? item.reusedComponents,
+        input.sourceContextSummary ?? item.sourceContextSummary,
+        false,
+      );
+    }
     const now = new Date().toISOString();
     item.html = input.html;
     item.title = input.title ?? item.title;
     item.changeSummary = input.changeSummary ?? item.changeSummary;
+    if (input.reusedComponents !== undefined) item.reusedComponents = input.reusedComponents;
+    if (input.sourceContextSummary !== undefined) item.sourceContextSummary = input.sourceContextSummary;
     item.version += 1;
     item.updatedAt = now;
     board.updatedAt = now;
     return this.renderAndSaveReviewBoard(session, board, input.filename);
+  }
+
+  async attachReferenceContext(input: AttachReferenceContextInput): Promise<ReviewBoardOutput> {
+    const session = this.getSession(input.sessionId);
+    this.markActivity(session);
+    const board = await this.loadReviewBoard(session, input.boardId);
+    const item = findReviewItem(board, input.referenceItemId);
+    assertReferenceItem(item);
+    const referenceContext = normalizeReferenceContext(input.referenceContext);
+    assertUsefulReferenceContext(referenceContext);
+    item.referenceContext = referenceContext;
+    item.version += 1;
+    item.updatedAt = new Date().toISOString();
+    board.updatedAt = item.updatedAt;
+    return this.renderAndSaveReviewBoard(session, board, input.filename);
+  }
+
+  async readReferenceContext(input: ReadReferenceContextInput): Promise<ReadReferenceContextOutput> {
+    const session = this.getSession(input.sessionId);
+    this.markActivity(session);
+    const board = await this.loadReviewBoard(session, input.boardId);
+    const item = findReviewItem(board, input.referenceItemId);
+    assertReferenceItem(item);
+    return {
+      sessionId: session.id,
+      boardId: board.boardId,
+      referenceItemId: item.id,
+      ...(item.referenceContext ? { referenceContext: item.referenceContext } : {}),
+    };
+  }
+
+  async attachProjectContext(input: AttachProjectContextInput): Promise<ReviewBoardOutput> {
+    const session = this.getSession(input.sessionId);
+    this.markActivity(session);
+    const now = new Date().toISOString();
+    const projectContext = normalizeProjectContext(input.projectContext);
+    assertUsefulProjectContext(projectContext);
+    const board =
+      (await this.loadReviewBoardIfExists(session, input.boardId)) ??
+      reviewBoardSchema.parse({
+        sessionId: session.id,
+        boardId: input.boardId,
+        acceptedItemIds: [],
+        projectContexts: [],
+        items: [],
+        screenVersion: session.screenVersion,
+        updatedAt: now,
+      });
+    const projectContexts = board.projectContexts ?? [];
+    const existing = projectContexts.find((candidate) => candidate.id === input.contextId);
+    if (existing) {
+      existing.title = input.title;
+      existing.projectContext = projectContext;
+      existing.version += 1;
+      existing.updatedAt = now;
+    } else {
+      projectContexts.push({
+        id: input.contextId,
+        title: input.title,
+        projectContext,
+        version: 1,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+    board.projectContexts = projectContexts;
+    board.updatedAt = now;
+    return this.renderAndSaveReviewBoard(session, board, input.filename);
+  }
+
+  async readProjectContext(input: ReadProjectContextInput): Promise<ReadProjectContextOutput> {
+    const session = this.getSession(input.sessionId);
+    this.markActivity(session);
+    const board = await this.loadReviewBoard(session, input.boardId);
+    const projectContext = (board.projectContexts ?? []).find((candidate) => candidate.id === input.contextId);
+    if (!projectContext) throw new Error(`Unknown project context: ${input.contextId}`);
+    return {
+      sessionId: session.id,
+      boardId: board.boardId,
+      contextId: input.contextId,
+      projectContext,
+    };
+  }
+
+  async analyzeProjectContext(input: AnalyzeProjectContextInput): Promise<AnalyzeProjectContextOutput> {
+    const session = this.getSession(input.sessionId);
+    this.markActivity(session);
+    const analysis = await analyzeProject({
+      projectRoot: input.projectRoot,
+      targetPath: input.targetPath,
+      targetRoute: input.targetRoute,
+      maxFiles: input.maxFiles,
+    });
+    const now = new Date().toISOString();
+    let board = await this.loadReviewBoardIfExists(session, input.boardId);
+    let changed = false;
+    let projectContextRecord: AnalyzeProjectContextOutput["projectContext"] | undefined;
+
+    if (input.referenceItemId) {
+      if (!board) throw new Error(`Unknown review board: ${input.boardId}`);
+      const item = findReviewItem(board, input.referenceItemId);
+      assertReferenceItem(item);
+      item.referenceContext = analysis.referenceContext;
+      item.analysisReport = analysis;
+      item.version += 1;
+      item.updatedAt = now;
+      changed = true;
+    }
+
+    if (input.contextId) {
+      board =
+        board ??
+        reviewBoardSchema.parse({
+          sessionId: session.id,
+          boardId: input.boardId,
+          acceptedItemIds: [],
+          projectContexts: [],
+          items: [],
+          screenVersion: session.screenVersion,
+          updatedAt: now,
+        });
+      const projectContexts = board.projectContexts ?? [];
+      const existing = projectContexts.find((candidate) => candidate.id === input.contextId);
+      if (existing) {
+        existing.title = input.title ?? existing.title;
+        existing.projectContext = analysis.projectContext;
+        existing.version += 1;
+        existing.updatedAt = now;
+        projectContextRecord = existing;
+      } else {
+        projectContextRecord = {
+          id: input.contextId,
+          title: input.title ?? `Project context ${input.contextId}`,
+          projectContext: analysis.projectContext,
+          version: 1,
+          createdAt: now,
+          updatedAt: now,
+        };
+        projectContexts.push(projectContextRecord);
+      }
+      board.projectContexts = projectContexts;
+      changed = true;
+    }
+
+    if (!changed || !board) {
+      return {
+        sessionId: session.id,
+        boardId: input.boardId,
+        analysis,
+        referenceContext: analysis.referenceContext,
+      };
+    }
+
+    board.updatedAt = now;
+    const rendered = await this.renderAndSaveReviewBoard(session, board, input.filename);
+    return {
+      sessionId: session.id,
+      boardId: rendered.boardId,
+      analysis,
+      referenceContext: analysis.referenceContext,
+      ...(projectContextRecord ? { projectContext: projectContextRecord } : {}),
+      filePath: rendered.filePath,
+      reloadedClients: rendered.reloadedClients,
+      updatedClients: rendered.updatedClients,
+      screenVersion: rendered.screenVersion,
+    };
+  }
+
+  async validateDraftAgainstReference(
+    input: ValidateDraftAgainstReferenceInput,
+  ): Promise<ValidateDraftAgainstReferenceOutput> {
+    const session = this.getSession(input.sessionId);
+    this.markActivity(session);
+    const board = await this.loadReviewBoard(session, input.boardId);
+    const reference = findReviewItem(board, input.referenceItemId);
+    const draft = findReviewItem(board, input.draftItemId);
+    assertReferenceItem(reference);
+    assertDraftHtmlItem(draft);
+    const referenceImagePath = resolveReviewImagePath(
+      session,
+      input.referenceImagePath ?? reference.imagePath,
+      "referenceImagePath",
+    );
+    if (!input.draftImagePath) {
+      throw new Error("draftImagePath is required because visual-companion does not capture web or mobile screens automatically.");
+    }
+    const draftImagePath = resolveReviewImagePath(session, input.draftImagePath, "draftImagePath");
+    const diffAssetFilename = `${sanitizeStorageName(input.draftItemId)}-${sanitizeStorageName(input.referenceItemId)}-diff-${Date.now()}.png`;
+    const report = await validateImages({
+      id: `validation-${Date.now()}`,
+      referenceItemId: input.referenceItemId,
+      draftItemId: input.draftItemId,
+      referenceImagePath,
+      draftImagePath,
+      diffImagePath: join(session.assetsDir, diffAssetFilename),
+      diffImageHref: `assets/${diffAssetFilename}`,
+      threshold: input.threshold ?? 0.1,
+      maxDiffRatio: input.maxDiffRatio ?? 0.08,
+    });
+    draft.validationReports = [...(draft.validationReports ?? []), report];
+    draft.updatedAt = report.createdAt;
+    board.updatedAt = report.createdAt;
+    const rendered = await this.renderAndSaveReviewBoard(session, board, input.filename);
+    return {
+      sessionId: session.id,
+      boardId: board.boardId,
+      report,
+      filePath: rendered.filePath,
+      reloadedClients: rendered.reloadedClients,
+      updatedClients: rendered.updatedClients,
+      screenVersion: rendered.screenVersion,
+    };
   }
 
   async addReviewItems(input: AddReviewItemsInput): Promise<ReviewBoardOutput> {
@@ -650,6 +901,7 @@ export class SessionManager {
       boardId: input.boardId,
       currentReferenceId: input.itemId,
       acceptedItemIds: [],
+      projectContexts: [],
       items: [],
       screenVersion: session.screenVersion,
       updatedAt: now,
@@ -862,10 +1114,51 @@ function normalizeReviewItem(item: ReviewItemInput, now: string): ReviewItem {
     temporary: item.temporary ?? false,
     basedOnId: item.basedOnId,
     changeSummary: item.changeSummary,
+    referenceContext: item.referenceContext ? normalizeReferenceContext(item.referenceContext) : undefined,
+    reusedComponents: item.reusedComponents,
+    sourceContextSummary: item.sourceContextSummary,
+    analysisReport: item.analysisReport ? analysisReportSchema.parse(item.analysisReport) : undefined,
+    validationReports: (item.validationReports ?? []).map((report) => visualValidationReportSchema.parse(report)),
     createdAt: now,
     updatedAt: now,
   };
 }
+
+function normalizeReferenceContext(context: ReviewItemInput["referenceContext"]): NonNullable<ReviewItem["referenceContext"]> {
+  return {
+    sourceFiles: context?.sourceFiles ?? [],
+    components: context?.components ?? [],
+    routes: context?.routes ?? [],
+    styleSources: context?.styleSources ?? [],
+    dataShapes: context?.dataShapes ?? [],
+    states: context?.states ?? [],
+    notes: context?.notes ?? [],
+  };
+}
+
+function normalizeProjectContext(context: ProjectContextInput | undefined): ProjectContext {
+  return {
+    sourceFiles: context?.sourceFiles ?? [],
+    components: context?.components ?? [],
+    routes: context?.routes ?? [],
+    styleSources: context?.styleSources ?? [],
+    dataShapes: context?.dataShapes ?? [],
+    states: context?.states ?? [],
+    reusableFunctions: context?.reusableFunctions ?? [],
+    notes: context?.notes ?? [],
+  };
+}
+
+type ProjectContextInput = {
+  sourceFiles?: string[] | undefined;
+  components?: string[] | undefined;
+  routes?: string[] | undefined;
+  styleSources?: string[] | undefined;
+  dataShapes?: string[] | undefined;
+  states?: string[] | undefined;
+  reusableFunctions?: string[] | undefined;
+  notes?: string[] | undefined;
+};
 
 function findReviewItem(board: ReviewBoard, itemId: string): ReviewItem {
   const item = board.items.find((candidate) => candidate.id === itemId);
@@ -891,6 +1184,48 @@ function assertReferenceItem(item: ReviewItem): void {
   if (item.role !== "reference") {
     throw new Error(`Review item is not a reference: ${item.id}`);
   }
+}
+
+function assertReferenceHasImplementationContext(item: ReviewItem, allowMissingContext: boolean): void {
+  if (allowMissingContext) return;
+  if (!item.referenceContext) {
+    throw new Error(`Reference implementation context is required before drafting: ${item.id}`);
+  }
+  assertUsefulReferenceContext(item.referenceContext);
+}
+
+function assertUsefulReferenceContext(context: NonNullable<ReviewItem["referenceContext"]>): void {
+  if (hasImplementationAnchor(context)) return;
+  throw new Error("Reference context must include at least one source file, component, route, or style source.");
+}
+
+function assertUsefulProjectContext(context: ProjectContext): void {
+  if (hasImplementationAnchor(context) || context.reusableFunctions.length > 0) return;
+  throw new Error("Project context must include at least one source file, component, route, style source, or reusable function.");
+}
+
+function assertDraftMentionsImplementationContext(
+  reusedComponents: string[] | undefined,
+  sourceContextSummary: string | undefined,
+  allowMissingContext: boolean,
+): void {
+  if (allowMissingContext) return;
+  if ((reusedComponents?.length ?? 0) > 0 || Boolean(sourceContextSummary?.trim())) return;
+  throw new Error("Draft must record reusedComponents or sourceContextSummary when implementation context is required.");
+}
+
+function hasImplementationAnchor(context: {
+  sourceFiles: string[];
+  components: string[];
+  routes: string[];
+  styleSources: string[];
+}): boolean {
+  return (
+    context.sourceFiles.length > 0 ||
+    context.components.length > 0 ||
+    context.routes.length > 0 ||
+    context.styleSources.length > 0
+  );
 }
 
 function assertDraftHtmlItem(item: ReviewItem): void {
@@ -1040,6 +1375,12 @@ async function assertReadableFile(path: string): Promise<void> {
 
 function resolveLocalFile(path: string): string {
   return isAbsolute(path) ? path : resolve(process.cwd(), path);
+}
+
+function resolveReviewImagePath(session: Session, path: string | undefined, fieldName: string): string {
+  if (!path) throw new Error(`${fieldName} is required.`);
+  if (path.startsWith("assets/")) return join(session.workDir, path);
+  return resolveLocalFile(path);
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {

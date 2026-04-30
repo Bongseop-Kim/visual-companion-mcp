@@ -8,12 +8,20 @@ import {
   acceptReviewItemInputSchema,
   addDraftForReferenceInputSchema,
   addReviewItemsInputSchema,
+  analyzeProjectContextInputSchema,
+  analyzeProjectContextOutputSchema,
   archiveReviewItemInputSchema,
+  attachProjectContextInputSchema,
+  attachReferenceContextInputSchema,
   importReferenceImageInputSchema,
   readEventsInputSchema,
   readEventsOutputSchema,
   readCurrentWireframeSummaryInputSchema,
   readCurrentWireframeSummaryOutputSchema,
+  readProjectContextInputSchema,
+  readProjectContextOutputSchema,
+  readReferenceContextInputSchema,
+  readReferenceContextOutputSchema,
   readReviewBoardInputSchema,
   requestReferenceImageInputSchema,
   requestReferenceImageOutputSchema,
@@ -36,6 +44,8 @@ import {
   type RequestUserInputOutput,
   updateReviewItemInputSchema,
   updateDraftForReferenceInputSchema,
+  validateDraftAgainstReferenceInputSchema,
+  validateDraftAgainstReferenceOutputSchema,
   waitForSelectionInputSchema,
   waitForSelectionOutputSchema,
 } from "./schemas";
@@ -204,7 +214,7 @@ export function createMcpServer(manager = new SessionManager()): McpServer {
     {
       title: "Add draft for reference",
       description:
-        "Add one HTML draft linked to an existing Review Board reference item while preserving all references, accepted items, proposals, and other drafts.",
+        "Add one HTML draft linked to an existing Review Board reference item while preserving all references, accepted items, proposals, and other drafts. Requires attached implementation context unless allowMissingContext is explicitly true.",
       inputSchema: addDraftForReferenceInputSchema,
       outputSchema: reviewBoardOutputSchema,
     },
@@ -216,11 +226,83 @@ export function createMcpServer(manager = new SessionManager()): McpServer {
     {
       title: "Update draft for reference",
       description:
-        "Update one existing HTML draft item only. This tool refuses to update references, proposals, and image items.",
+        "Update one existing HTML draft item only. Requires the linked reference implementation context unless allowMissingContext is explicitly true. This tool refuses to update references, proposals, and image items.",
       inputSchema: updateDraftForReferenceInputSchema,
       outputSchema: reviewBoardOutputSchema,
     },
     async (args) => toToolResult(await manager.updateDraftForReference(args)),
+  );
+
+  server.registerTool(
+    "attach_reference_context",
+    {
+      title: "Attach reference context",
+      description:
+        "Attach implementation context discovered from the repository to an existing reference item so future drafts reuse real routes, components, styles, data shapes, and states.",
+      inputSchema: attachReferenceContextInputSchema,
+      outputSchema: reviewBoardOutputSchema,
+    },
+    async (args) => toToolResult(await manager.attachReferenceContext(args)),
+  );
+
+  server.registerTool(
+    "read_reference_context",
+    {
+      title: "Read reference context",
+      description:
+        "Read the implementation context attached to a reference item before adding or updating drafts for that reference.",
+      inputSchema: readReferenceContextInputSchema,
+      outputSchema: readReferenceContextOutputSchema,
+    },
+    async (args) => toToolResult(await manager.readReferenceContext(args)),
+  );
+
+  server.registerTool(
+    "attach_project_context",
+    {
+      title: "Attach project context",
+      description:
+        "Attach implementation context for a new or not-yet-rendered page after inspecting nearby routes, reusable components, styles, data shapes, states, and helper functions.",
+      inputSchema: attachProjectContextInputSchema,
+      outputSchema: reviewBoardOutputSchema,
+    },
+    async (args) => toToolResult(await manager.attachProjectContext(args)),
+  );
+
+  server.registerTool(
+    "read_project_context",
+    {
+      title: "Read project context",
+      description:
+        "Read implementation context for a new or not-yet-rendered page before creating drafts so existing project structure is reused.",
+      inputSchema: readProjectContextInputSchema,
+      outputSchema: readProjectContextOutputSchema,
+    },
+    async (args) => toToolResult(await manager.readProjectContext(args)),
+  );
+
+  server.registerTool(
+    "analyze_project_context",
+    {
+      title: "Analyze project context",
+      description:
+        "Automatically inspect the target project with static TypeScript/JSX analysis and attach route, component, import, style, data, and state context to a reference item or project context.",
+      inputSchema: analyzeProjectContextInputSchema,
+      outputSchema: analyzeProjectContextOutputSchema,
+    },
+    async (args) => toToolResult(await manager.analyzeProjectContext(args)),
+  );
+
+  server.registerTool(
+    "validate_draft_against_reference",
+    {
+      title: "Validate draft against reference",
+      description:
+        "Compare a reference screenshot and a supplied draft screenshot as PNG images, save a diff image, and attach the visual validation report to the draft item.",
+      inputSchema: validateDraftAgainstReferenceInputSchema,
+      outputSchema: validateDraftAgainstReferenceOutputSchema,
+    },
+    async (args) => toToolResult(await manager.validateDraftAgainstReference(args)),
   );
 
   server.registerTool(
@@ -836,7 +918,7 @@ Default to current-code-first visual review. In product UI work, the normal goal
 
 Before making frontend or screen drafts, check the target project's own \`AGENTS.md\` and follow any project-local frontend or screen guidance first.
 
-Inspect the target route, component tree, styles, fixtures, and existing UI states before rendering. When the target exists, run or inspect the existing app so the first visual draft matches the real current screen. When it does not exist, inspect the closest comparable screens and clearly state that the draft is new but based on those existing patterns.
+Inspect the target route, component tree, styles, fixtures, and existing UI states before rendering. Screenshot capture is reference material only; repository implementation context is the primary source of truth for draft code. When the target exists, run or inspect the existing app so the first visual draft matches the real current screen. When it does not exist, inspect the closest comparable screens and clearly state that the draft is new but based on those existing patterns.
 
 Render the current screen baseline first when one exists, or make the first draft a small variant of that baseline. Preserve real layout, copy, spacing, navigation, data shape, and interaction states unless the user asked to change them. For a new page, preserve the surrounding product structure and reuse established components and states. When sharing the URL, state what source page/component the draft is based on.
 
@@ -852,7 +934,7 @@ Preferred workflow:
 2. Call \`start_session\` to create a local browser session.
 3. Render the current screen baseline first when one exists, or a new draft based on nearby product patterns when it does not.
 4. If the screen includes overlays or multi-step flows, include a review view that expands the important states after the baseline unless the user only asked for exact runtime behavior.
-5. For multi-draft reviews, use \`show_review_board\`; for any real current screen shown in web, mobile, Expo, native apps, or design tools, prefer \`request_reference_image\` so the user can paste or drop a screenshot as a locked baseline. Use \`import_reference_image\` when a local image path is already available. Add and revise HTML variants with \`add_draft_for_reference\` and \`update_draft_for_reference\`. For advanced edits use \`update_review_item\`, \`add_review_items\`, \`accept_review_item\`, or \`archive_review_item\`. For quick one-off choices, prefer \`show_choice_grid\`, \`show_options\`, \`show_cards\`, or \`show_comparison\`; use \`show_screen\` for custom HTML.
+5. For multi-draft reviews, use \`show_review_board\`; for any real current screen shown in web, mobile, Expo, native apps, or design tools, prefer \`request_reference_image\` so the user can paste or drop a screenshot as a locked baseline. Use \`import_reference_image\` when a local image path is already available. Analyze the target route, components, styles, data shapes, and states with \`analyze_project_context\`, or attach manually with \`attach_reference_context\`, then read them with \`read_reference_context\` before creating drafts. \`add_draft_for_reference\` and \`update_draft_for_reference\` require that implementation context by default and should record \`reusedComponents\` or \`sourceContextSummary\`. For a new page without a current reference, inspect nearby code and store those findings with \`analyze_project_context\` or \`attach_project_context\`, then read them with \`read_project_context\` before drafting. When a draft screenshot is available, call \`validate_draft_against_reference\` to attach a PNG diff report to the draft. For advanced edits use \`update_review_item\`, \`add_review_items\`, \`accept_review_item\`, or \`archive_review_item\`. For quick one-off choices, prefer \`show_choice_grid\`, \`show_options\`, \`show_cards\`, or \`show_comparison\`; use \`show_screen\` for custom HTML.
 6. Give the returned \`url\` to the user and name the source page/component or comparable patterns used.
 7. If the UI asks the user to choose, call \`wait_for_selection({ sinceScreenVersion })\` with the latest returned \`screenVersion\` or use \`read_events\`.
 8. Call \`stop_session\` when the review is done.
@@ -870,6 +952,12 @@ Tool names:
 - \`update_review_item\`
 - \`add_draft_for_reference\`
 - \`update_draft_for_reference\`
+- \`attach_reference_context\`
+- \`read_reference_context\`
+- \`attach_project_context\`
+- \`read_project_context\`
+- \`analyze_project_context\`
+- \`validate_draft_against_reference\`
 - \`add_review_items\`
 - \`accept_review_item\`
 - \`archive_review_item\`

@@ -4,6 +4,12 @@
 
 It is designed for visual collaboration loops such as layout choices, wireframes, diagrams, and UI direction reviews.
 
+This project is not trying to be the lightest way to show one quick mockup. Use
+a simpler visual companion for that. Its intended niche is complex existing-UI
+changes where a coding agent should preserve the current screen, inspect the
+real code structure, compare multiple drafts, and reduce missed UI areas before
+touching production code.
+
 ## Features
 
 - MCP stdio server with template, input, and session tools:
@@ -18,6 +24,12 @@ It is designed for visual collaboration loops such as layout choices, wireframes
   - `update_review_item`
   - `add_draft_for_reference`
   - `update_draft_for_reference`
+  - `attach_reference_context`
+  - `read_reference_context`
+  - `attach_project_context`
+  - `read_project_context`
+  - `analyze_project_context`
+  - `validate_draft_against_reference`
   - `add_review_items`
   - `accept_review_item`
   - `archive_review_item`
@@ -36,9 +48,70 @@ It is designed for visual collaboration loops such as layout choices, wireframes
 - Multiple sessions can run in one MCP process on separate local ports.
 - Fast choice templates for common selection loops; use `show_choice_grid`, `show_options`, `show_cards`, or `show_comparison` before falling back to raw `show_screen`.
 - Review Board state for multi-draft reviews; reference items such as current and accepted screens are preserved while individual drafts or proposals are updated.
+- Automatic static project analysis for existing references and new-page drafts, so screenshots stay secondary to source files, components, routes, styles, data shapes, states, and reusable functions.
+- PNG-based visual validation that compares a supplied draft screenshot against a locked reference and stores a diff report on the Review Board.
 - Universal screenshot reference capture; users can paste or drop web, mobile, Expo, native app, or design-tool screenshots into the browser session as locked references.
 - Optional lightweight wireframe summaries can be saved beside wireframe screens and read back as structured MCP output.
 - Built-in CSS classes for common visual patterns: `.options`, `.cards`, `.choice-grid`, `.mockup`, `.split`, `.pros-cons`.
+
+## When To Use This Instead Of A Lightweight Visual Companion
+
+Use `visual-companion-mcp` when at least two of these are true:
+
+- The target screen already exists and should be preserved as a visual baseline.
+- The requested change touches several small UI areas at once.
+- The screen has hidden states, overlays, filters, loading/empty states, or dense responsive layout.
+- The draft should reuse existing routes, components, styles, data shapes, and state patterns.
+- Direct implementation would likely require test updates or could break adjacent logic.
+- You need to compare several drafts without losing the current screen or accepted variants.
+- You want a screenshot diff report before committing to a direction.
+
+Use a lighter tool when the task is a one-off sketch, a simple layout choice, or
+an isolated visual idea that does not depend on the existing codebase.
+
+## Benchmarking Value
+
+The project should prove value on complex existing-UI changes, not on the fastest
+possible first mockup. Benchmark it against a lightweight visual companion and a
+direct-code-change workflow.
+
+Recommended benchmark set:
+
+- Pick 5 real screens from the same product: a dense form, a dashboard, a
+  filter/list view, a mobile card screen, and a modal or multi-state flow.
+- For each screen, write one request with 3-7 small visual changes that could
+  plausibly affect existing components or tests.
+- Run the same request through:
+  - lightweight visual companion first, then implementation
+  - `visual-companion-mcp` first, then implementation
+  - direct implementation without a visual draft
+
+Score each run with this table:
+
+| Metric | How to Measure | Better |
+| --- | --- | --- |
+| Time to first reviewable draft | Minutes from request to first screen the user can judge | Lower |
+| Decision round trips | Number of user-agent turns before direction is accepted | Lower |
+| Missed requested changes | Count visible requested changes absent from the accepted draft | Lower |
+| Unintended visual changes | Count areas that changed but were not requested | Lower |
+| Existing component reuse | Count existing components/styles/data patterns reused or preserved | Higher |
+| Implementation churn | Files changed after direction is accepted | Lower |
+| Broken verification | Failed tests/typecheck/build caused by final implementation | Lower |
+| User confidence | 1-5 rating after choosing a direction | Higher |
+
+Suggested scoring:
+
+- Quantitative score: normalize the first 7 metrics to 0-100 and average them.
+- Qualitative score: convert user confidence to 0-100.
+- Final score: `0.7 * quantitative + 0.3 * qualitative`.
+
+Success criteria:
+
+- It is acceptable for `visual-companion-mcp` to be slower to the first draft.
+- It should win by reducing missed changes, unintended changes, implementation
+  churn, broken verification, or decision round trips.
+- If it does not win on at least 3 of the 5 benchmark screens, the project is
+  probably too heavy for its current value.
 
 ## Install
 
@@ -172,6 +245,12 @@ enabled_tools = [
   "update_review_item",
   "add_draft_for_reference",
   "update_draft_for_reference",
+  "attach_reference_context",
+  "read_reference_context",
+  "attach_project_context",
+  "read_project_context",
+  "analyze_project_context",
+  "validate_draft_against_reference",
   "add_review_items",
   "accept_review_item",
   "archive_review_item",
@@ -213,6 +292,12 @@ Expected output:
     "update_review_item",
     "add_draft_for_reference",
     "update_draft_for_reference",
+    "attach_reference_context",
+    "read_reference_context",
+    "attach_project_context",
+    "read_project_context",
+    "analyze_project_context",
+    "validate_draft_against_reference",
     "add_review_items",
     "accept_review_item",
     "archive_review_item",
@@ -288,9 +373,18 @@ Use this flow:
    screen shown in web, mobile, Expo, native apps, or design tools, prefer
    `request_reference_image` so the user can paste or drop a screenshot as a
    locked baseline. Use `import_reference_image` when a local image file path is
-   already available. Add and revise HTML variants with
-   `add_draft_for_reference` and `update_draft_for_reference`. For later
-   advanced edits use `update_review_item`, `add_review_items`,
+   already available. Treat the screenshot as reference material, not the
+   implementation source of truth. Inspect the target route/component/styles/data,
+   attach the findings with `analyze_project_context` or
+   `attach_reference_context`, then read them back with `read_reference_context`.
+   `add_draft_for_reference` and
+   `update_draft_for_reference` require that implementation context by default
+   and should record reused components or a source-context summary. For a new
+   page without a current reference, inspect nearby code and store those findings
+   with `analyze_project_context` or `attach_project_context`, then read them
+   with `read_project_context` before drafting. When a draft screenshot is
+   available, call `validate_draft_against_reference` to attach a PNG diff report
+   to the draft. For later advanced edits use `update_review_item`, `add_review_items`,
    `accept_review_item`, or `archive_review_item`. For fast one-off choices,
    prefer `show_choice_grid`, `show_options`, `show_cards`, or
    `show_comparison`; use `show_screen` for custom HTML.
@@ -397,16 +491,66 @@ Creates or replaces a board and renders visible items as Reference, Draft, and P
 Updates exactly one board item and re-renders the full board. Other references,
 drafts, and proposals are preserved. Locked references cannot be updated.
 
-### `add_draft_for_reference({ sessionId, boardId, referenceItemId, draftId, title, html, changeSummary?, filename? })`
+### `add_draft_for_reference({ sessionId, boardId, referenceItemId, draftId, title, html, changeSummary?, reusedComponents?, sourceContextSummary?, allowMissingContext?, filename? })`
 
 Adds a single HTML draft linked to an existing reference item. Use this after
 `request_reference_image` or `import_reference_image` so the real current screen
 stays fixed while the draft appears beside it.
 
-### `update_draft_for_reference({ sessionId, boardId, draftId, html, title?, changeSummary?, filename? })`
+By default, the reference must already have implementation context attached with
+`attach_reference_context`, and the draft should record `reusedComponents` or
+`sourceContextSummary`. Set `allowMissingContext: true` only for intentionally
+screenshot-only or throwaway reviews.
+
+### `update_draft_for_reference({ sessionId, boardId, draftId, html, title?, changeSummary?, reusedComponents?, sourceContextSummary?, allowMissingContext?, filename? })`
 
 Updates one existing HTML draft only. It refuses to update reference, proposal,
 or image items, which keeps the baseline safe during rapid visual iteration.
+By default, the linked reference must still have implementation context, and the
+draft must retain reused component or source-context metadata.
+
+### `attach_reference_context({ sessionId, boardId, referenceItemId, referenceContext, filename? })`
+
+Stores implementation context on a reference item after the agent inspects the
+repo. Use it to record source files, components, routes, style sources, data
+shapes, states, and notes so drafts are grounded in existing code rather than
+only the screenshot.
+
+### `read_reference_context({ sessionId, boardId, referenceItemId })`
+
+Reads the implementation context attached to a reference item. Call this before
+adding or updating a draft for that reference.
+
+### `attach_project_context({ sessionId, boardId, contextId, title, projectContext, filename? })`
+
+Stores implementation context for a new or not-yet-rendered page after the agent
+inspects nearby routes, shared components, style sources, data shapes, states,
+and reusable functions. Use this when there is no current screen reference yet,
+so the first draft still starts from the product's real code structure.
+
+### `read_project_context({ sessionId, boardId, contextId })`
+
+Reads stored project context before creating new-page drafts.
+
+### `analyze_project_context({ sessionId, boardId, targetPath?, targetRoute?, referenceItemId?, contextId?, title?, projectRoot?, maxFiles?, filename? })`
+
+Automatically inspects the target project using static TypeScript/JSX analysis.
+It detects route files, component names, imports, React Native core components,
+`StyleSheet.create`, `className`, style props, data types, and common state/data
+hooks. If `referenceItemId` is provided, it stores the result on that reference.
+If `contextId` is provided, it stores project context for a new page.
+
+This tool does not run the app, open a simulator, or capture the screen.
+
+### `validate_draft_against_reference({ sessionId, boardId, referenceItemId, draftItemId, draftImagePath?, referenceImagePath?, threshold?, maxDiffRatio?, filename? })`
+
+Compares a locked reference screenshot with a supplied draft screenshot. Both
+images must be PNG files with matching dimensions. The tool stores diff ratio,
+pixel count, status, and a diff image on the draft item in the Review Board.
+
+`draftImagePath` is required. The server intentionally does not automate browser
+or mobile capture, so this works the same for web, Expo, native apps, and design
+tools.
 
 ### `add_review_items({ sessionId, boardId, items, filename? })`
 
